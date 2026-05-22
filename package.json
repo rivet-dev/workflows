@@ -213,6 +213,7 @@
 	},
 	"scripts": {
 		"build": "tsup",
+		"prepare": "tsup",
 		"check-types": "tsc --noEmit",
 		"test": "vitest run",
 		"generate-module-map": "tsx scripts/generate-module-map.ts"
