@@ -1,0 +1,30 @@
+---
+title: "Versioning & Migrations"
+description: "Evolving a workflow that is already running."
+---
+
+## Versioned workflow evolution
+
+Use this when workflow structure changes across deployments and old histories must still replay.
+
+<CodeSnippet file="examples/docs/actors-workflows/versioned-workflow.ts" />
+
+## Version gates with `getVersion`
+
+Use `ctx.getVersion(name, latest)` to branch behavior when you change a workflow's logic while old instances are still in flight. It returns the version this instance is pinned to at that point:
+
+- A fresh instance resolves to `latest`.
+- An instance that already executed past this point under older code resolves to `1` (the implicit floor).
+
+The resolved version is recorded in history, so replays are deterministic and each instance stays on the branch it started on. Inside a loop, every iteration resolves independently, so in-flight iterations finish on the old branch while new iterations pick up `latest`.
+
+<CodeSnippet file="examples/docs/actors-workflows/get-version.ts" />
+
+`latest` must be an integer `>= 1`, and the gate name must be unique within its scope like any other entry. Once every old instance has drained, retire the gate by replacing the call with `ctx.removed(name, "version_check")`.
+
+## Migrations
+
+- Keep workflow entry names stable once deployed.
+- If an old entry was removed or renamed, call `ctx.removed(name, originalType)`.
+- To change behavior at a point while old instances are still running, gate it with `ctx.getVersion(name, latest)` (see [Version gates](#version-gates-with-get-version)).
+- This keeps replay compatible across deployments.

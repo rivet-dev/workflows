@@ -1,0 +1,27 @@
+---
+title: "Patterns"
+description: "Common workflow shapes used in production systems."
+---
+
+These are common workflow shapes used in production systems.
+
+## Store workflow progress in state + broadcast
+
+Store progress in `state` so replay and recovery always restore it. Broadcast state changes so clients can render progress in realtime.
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/actors-workflows/store-progress/index.ts" title="index.ts" />
+<CodeSnippet file="examples/docs/actors-workflows/store-progress/client.ts" title="client.ts" />
+</CodeGroup>
+
+## Cron (queue-driven)
+
+Rivet scheduling triggers actions. For cron-like workflows, use a small scheduled action as a bridge that enqueues work, then process that work in the workflow loop.
+
+<CodeSnippet file="examples/docs/actors-workflows/cron.ts" />
+
+## Setup & teardown
+
+Use this when you need one-time initialization before a long-lived loop, plus cleanup when the actor stops sleeping or is destroyed.
+
+<CodeSnippet file="examples/docs/actors-workflows/setup-teardown-pattern.ts" />

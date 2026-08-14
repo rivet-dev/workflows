@@ -1,0 +1,58 @@
+---
+title: "Queues & Messaging"
+description: "Queue waits, request/response, drains, and signal-driven loops."
+---
+
+## Queue
+
+Use this for fire-and-forget commands where the client does not need a reply.
+
+Use the [`Loops`](/workflows/docs/quickstart#loops) example as the baseline pattern.
+
+## Request/response (using queue)
+
+Use this when the caller needs a response from queued processing.
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/actors-workflows/request-response/index.ts" title="index.ts" />
+<CodeSnippet file="examples/docs/actors-workflows/request-response/client.ts" title="client.ts" />
+</CodeGroup>
+
+## Queue-driven worker
+
+Use this when external systems enqueue work and the actor should process each item durably.
+
+<CodeSnippet file="examples/docs/actors-workflows/queue-worker.ts" />
+
+## Request/response over queue (async RPC)
+
+Use this when you want decoupled actor-to-actor communication with durable waits and explicit completion.
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/actors-workflows/request-response-queue/index.ts" title="index.ts" />
+<CodeSnippet file="examples/docs/actors-workflows/request-response-queue/client.ts" title="client.ts" />
+</CodeGroup>
+
+## Batch drainer
+
+Use this when throughput matters and handling one message at a time is too expensive.
+
+<CodeSnippet file="examples/docs/actors-workflows/batch-drainer.ts" />
+
+## Bounded drain + concurrency cap
+
+Use this when inbound work can spike and you need predictable per-iteration limits.
+
+<CodeSnippet file="examples/docs/actors-workflows/bounded-drain.ts" />
+
+## Signal-driven control loop
+
+Use this when workflow progress should be triggered by commands/events instead of fixed polling intervals.
+
+<CodeSnippet file="examples/docs/actors-workflows/signal-control-loop.ts" />
+
+## Human approval gate
+
+Use this when an operation must pause for a user or system decision before continuing.
+
+<CodeSnippet file="examples/docs/actors-workflows/approval-gate.ts" />

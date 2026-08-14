@@ -1,0 +1,19 @@
+---
+title: "Reference"
+description: "Workflow history debugging and recommendations."
+---
+
+## Debugging
+
+- `GET /inspector/workflow-history` returns workflow history status for an actor.
+- Response includes `isWorkflowEnabled` and `history`.
+- In non-dev mode, inspector endpoints require authorization.
+
+## Recommendations
+
+- Prefer queue-driven loops for long-lived workflows.
+- Structure long-lived workflows with setup and teardown around the main loop.
+- Keep actor state changes and side effects inside steps.
+- Store workflow progress in `state` and broadcast updates as progress changes.
+- Use timeouts and rollback for external side effects.
+- Write step bodies idempotently. `state` and `vars` mutations from a failed attempt are never rolled back, whether the step retries or `tryStep`/`try` catches the failure.

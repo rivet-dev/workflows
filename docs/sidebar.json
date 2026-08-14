@@ -1,0 +1,57 @@
+{
+	"docs": [
+		{
+			"title": "General",
+			"pages": [
+				{
+					"title": "Introduction",
+					"href": "/workflows/docs",
+					"icon": "faSquareInfo"
+				},
+				{
+					"title": "Quickstart",
+					"href": "/workflows/docs/quickstart",
+					"icon": "faForwardFast"
+				}
+			]
+		},
+		{
+			"title": "Concepts",
+			"pages": [
+				{
+					"title": "Steps",
+					"href": "/workflows/docs/steps"
+				},
+				{
+					"title": "Queues & Messaging",
+					"href": "/workflows/docs/queues"
+				},
+				{
+					"title": "Timers & Concurrency",
+					"href": "/workflows/docs/timers-and-concurrency"
+				},
+				{
+					"title": "Failure & Recovery",
+					"href": "/workflows/docs/failure-and-recovery"
+				},
+				{
+					"title": "Versioning & Migrations",
+					"href": "/workflows/docs/versioning"
+				},
+				{
+					"title": "Patterns",
+					"href": "/workflows/docs/patterns"
+				}
+			]
+		},
+		{
+			"title": "Reference",
+			"pages": [
+				{
+					"title": "Reference",
+					"href": "/workflows/docs/reference"
+				}
+			]
+		}
+	]
+}

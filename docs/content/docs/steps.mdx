@@ -1,0 +1,50 @@
+---
+title: "Steps"
+description: "Step boundaries, terminal failures as data, and checkpoint-friendly loops."
+---
+
+## Step-only access to actor APIs
+
+`state`, `vars`, `db`, `client()`, and connection/event APIs are only valid inside `ctx.step(...)` callbacks.
+
+Use non-step workflow code for orchestration only: queue waits, sleeps, loops, joins, races, and rollback boundaries. Keep actor-local side effects in steps.
+
+## Handling terminal failures as data
+
+Use `tryStep` when a step failure should produce data instead of failing the whole workflow.
+
+<CodeSnippet file="examples/docs/actors-workflows/try-step.ts" />
+
+Use `try` when you want to recover from terminal `step`, `join`, or `race` failures inside a named block.
+
+```ts
+async function runPaymentFlow(ctx: any) {
+  return await ctx.try("payment-flow", async (blockCtx: any) => {
+    const auth = await blockCtx.step("authorize", async (blockCtx) =>
+      authorizeOrder("order-123"),
+    );
+    const capture = await blockCtx.step("capture", async (blockCtx) =>
+      captureOrder("order-123"),
+    );
+    return { auth, capture };
+  });
+}
+
+async function authorizeOrder(orderId: string): Promise<string> {
+  return `auth-${orderId}`;
+}
+
+async function captureOrder(orderId: string): Promise<string> {
+  return `capture-${orderId}`;
+}
+```
+
+- `tryStep` and `try` only catch terminal failures. Retry backoff, sleeps, queue waits, eviction, and history divergence still rethrow.
+- Catching a failure does not undo it. `state` and `vars` mutations made before the failure remain visible after `tryStep` or `try` returns, so use explicit compensating steps when a caught failure needs cleanup.
+- `RollbackError` is not caught by default. Pass `catch: ["rollback"]` when you want rollback failures returned as data.
+
+## Checkpoint-friendly loop design
+
+Use this when you need reliable replay and resume semantics across crashes and restarts.
+
+<CodeSnippet file="examples/docs/actors-workflows/checkpoint-friendly.ts" />

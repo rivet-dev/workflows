@@ -1,0 +1,42 @@
+---
+title: "Quickstart"
+description: "Getting started with simple workflows, loops, and setup and teardown."
+skill: true
+---
+
+import { Hosting } from "@/components/docs/Hosting";
+
+## Simple workflow
+
+Use this when you need a short multi-step sequence.
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/actors-workflows/simple-workflow/index.ts" title="index.ts" />
+<CodeSnippet file="examples/docs/actors-workflows/simple-workflow/client.ts" title="client.ts" />
+</CodeGroup>
+
+## Loops
+
+This is the recommended workflow shape for most actor workloads.
+
+- Use a queue wait inside the loop to receive the next unit of work.
+- Keep actor state changes in a single workflow loop.
+- This gives you one durable workflow that manages all actor progress.
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/actors-workflows/loops/index.ts" title="index.ts" />
+<CodeSnippet file="examples/docs/actors-workflows/loops/client.ts" title="client.ts" />
+</CodeGroup>
+
+## Setup & teardown
+
+Use this when the workflow should initialize resources, process queued commands, then clean up.
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/actors-workflows/setup-teardown/index.ts" title="index.ts" />
+<CodeSnippet file="examples/docs/actors-workflows/setup-teardown/client.ts" title="client.ts" />
+</CodeGroup>
+
+## Deploy
+
+<Hosting product="workflows" />
