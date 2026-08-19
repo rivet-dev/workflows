@@ -1,0 +1,82 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact semver to publish
+        required: true
+        type: string
+      dist_tag:
+        description: npm dist-tag (auto derives latest/rc/next)
+        required: true
+        default: auto
+        type: choice
+        options: [auto, latest, rc, next, preview]
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - id: release
+        run: >-
+          node scripts/resolve-release.mjs
+          --version=${{ inputs.version }}
+          --tag=${{ inputs.dist_tag }}
+          --branch=${{ github.ref_name }}
+      - name: Verify npm authentication and unused version
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then npm whoami; else npm ping; fi
+          if npm view "@rivet-dev/workflows@${{ steps.release.outputs.version }}" version >/dev/null 2>&1; then
+            echo "@rivet-dev/workflows@${{ steps.release.outputs.version }} already exists" >&2
+            exit 1
+          fi
+      - name: Set ephemeral package version
+        run: npm pkg set "version=${{ steps.release.outputs.version }}" --prefix packages/workflows
+      - run: pnpm run ci
+      - name: Pack verified release artifact
+        run: |
+          mkdir -p .pack
+          npm pack ./packages/workflows --silent --pack-destination .pack
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: >-
+          npm publish
+          .pack/rivet-dev-workflows-${{ steps.release.outputs.version }}.tgz
+          --access public
+          --provenance
+          --tag ${{ steps.release.outputs.npm_tag }}
+      - name: Tag and release
+        if: steps.release.outputs.real_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+          gh release create "v$VERSION" --generate-notes --title "v$VERSION"

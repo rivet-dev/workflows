@@ -1,0 +1,7 @@
+packages:
+  - packages/*
+
+onlyBuiltDependencies:
+  - '@biomejs/biome'
+  - cbor-extract
+  - esbuild

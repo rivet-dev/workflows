@@ -1,0 +1,24 @@
+{
+	"name": "@rivet-dev/workflows-workspace",
+	"private": true,
+	"type": "module",
+	"packageManager": "pnpm@10.13.1",
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"build": "pnpm --filter @rivet-dev/workflows build",
+		"check-types": "pnpm --filter @rivet-dev/workflows check-types",
+		"test": "pnpm --filter @rivet-dev/workflows test",
+		"test:e2e": "pnpm --filter @rivet-dev/workflows test:e2e",
+		"lint": "biome lint .",
+		"format:check": "biome check packages/workflows/src/rivetkit packages/workflows/src/mod.ts packages/workflows/tests/rivetkit packages/workflows/tests/e2e packages/workflows/tests/compat packages/workflows/tests/fixtures packages/workflows/vitest.config.ts packages/workflows/vitest.e2e.config.ts scripts",
+		"check:boundaries": "tsx scripts/check-boundaries.ts",
+		"verify:pack": "tsx scripts/verify-pack.ts",
+		"ci": "pnpm lint && pnpm format:check && pnpm check:boundaries && pnpm check-types && pnpm test && pnpm test:e2e && pnpm build && pnpm verify:pack"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.3.11",
+		"tsx": "^4.20.6"
+	}
+}
