@@ -37,6 +37,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
           registry-url: https://registry.npmjs.org
+      - name: Install OIDC-capable npm
+        run: npm install --global npm@11.16.0
       - run: pnpm install --frozen-lockfile
       - id: release
         run: >-
@@ -45,11 +47,9 @@ jobs:
           --tag=${{ inputs.dist_tag }}
           --branch=${{ github.ref_name }}
       - name: Verify npm authentication and unused version
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then npm whoami; else npm ping; fi
+          npm ping
           if npm view "@rivet-dev/workflows@${{ steps.release.outputs.version }}" version >/dev/null 2>&1; then
             echo "@rivet-dev/workflows@${{ steps.release.outputs.version }} already exists" >&2
             exit 1
@@ -62,8 +62,6 @@ jobs:
           mkdir -p .pack
           npm pack ./packages/workflows --silent --pack-destination .pack
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: >-
           npm publish
           .pack/rivet-dev-workflows-${{ steps.release.outputs.version }}.tgz
