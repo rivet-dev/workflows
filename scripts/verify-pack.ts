@@ -75,6 +75,10 @@ try {
 			"RUN_FUNCTION_CONFIG_SYMBOL",
 			"AnyStaticActorInstance",
 			"@rivetkit/workflow-engine",
+			"rivetkit/storage",
+			"WORKFLOW_STORAGE_V1",
+			"flushWithState",
+			"ctx.sql",
 		]) {
 			if (source.includes(token)) {
 				throw new Error(`${declaration} exposes private token ${token}`);
@@ -121,16 +125,19 @@ try {
 		await writeFile(
 			join(fixture, "smoke.ts"),
 			[
-				'import { actor } from "rivetkit";',
 				'import { workflow } from "@rivet-dev/workflows";',
 				'import { InMemoryDriver } from "@rivet-dev/workflows/testing";',
-				"const definition = actor({",
-				"  run: workflow(async (ctx) => {",
+				"const definition = workflow({",
+				"  state: { count: 0 },",
+				"  actions: { getCount: (c) => c.state.count },",
+				"  run: async (ctx) => {",
 				'    await ctx.step("typed", async (step) => {',
 				'      step.log.info("compiled");',
+				'      await step.db.execute("SELECT 1");',
+				"      step.state.count++;",
 				"      return 1;",
 				"    });",
-				"  }),",
+				"  },",
 				"});",
 				"void definition; void new InMemoryDriver();",
 			].join("\n"),

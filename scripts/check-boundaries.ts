@@ -8,10 +8,19 @@ const forbidden = [
 	"ACTOR_CONTEXT_INTERNAL_SYMBOL",
 	"RUN_FUNCTION_CONFIG_SYMBOL",
 	"AnyStaticActorInstance",
-	"_rivet_wf_kv",
-	"makeWorkflowKey",
-	"workflowStoragePrefix",
 	"@rivetkit/workflow-engine",
+	"rivetkit/storage",
+	"rivetkit/inspector/workflow",
+	"ctx.storage",
+	"WORKFLOW_STORAGE_V1",
+	"flushWithState",
+	"ctx.sql",
+	"runCtx.sql",
+	"_rivet_runtime",
+	"_rivet_meta",
+	"_rivet_queue",
+	"CREATE TABLE _rivet_wf_kv",
+	"ALTER TABLE _rivet_wf_kv",
 ];
 
 async function files(path: string): Promise<string[]> {

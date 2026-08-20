@@ -1,8 +1,5 @@
 import type { ActorQueue, ActorRun, RunContext } from "rivetkit";
-import {
-	WORKFLOW_STORAGE_V1,
-	type WorkflowStorageHandle,
-} from "rivetkit/storage";
+import type { RawAccess } from "rivetkit/db";
 import type {
 	EngineDriver,
 	KVEntry,
@@ -11,6 +8,14 @@ import type {
 	WorkflowMessageDriver,
 	WorkflowMessageIdentity,
 } from "../index.js";
+
+const WORKFLOW_STORAGE_PREFIX = new Uint8Array([6, 1]);
+const WORKFLOW_UPSERT_SQL =
+	"INSERT INTO _rivet_wf_kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+
+const WORKFLOW_SQLITE_MAX_VALUE_BYTES = 256 * 1024;
+const WORKFLOW_SQLITE_MAX_BATCH_ROWS = 128;
+const WORKFLOW_SQLITE_MAX_BATCH_BYTES = 512 * 1024;
 
 function track<T>(
 	runCtx: RunContext<any, any, any, any, any, any, any, any>,
@@ -23,6 +28,169 @@ function track<T>(
 		),
 	);
 	return promise;
+}
+
+function prefixWorkflowKey(key: Uint8Array): Uint8Array {
+	const prefixed = new Uint8Array(
+		WORKFLOW_STORAGE_PREFIX.byteLength + key.byteLength,
+	);
+	prefixed.set(WORKFLOW_STORAGE_PREFIX);
+	prefixed.set(key, WORKFLOW_STORAGE_PREFIX.byteLength);
+	return prefixed;
+}
+
+function stripWorkflowKey(key: Uint8Array): Uint8Array {
+	if (
+		key.byteLength < WORKFLOW_STORAGE_PREFIX.byteLength ||
+		!WORKFLOW_STORAGE_PREFIX.every((byte, index) => key[index] === byte)
+	) {
+		throw new Error("workflow SQLite key escaped the [6, 1] namespace");
+	}
+	return key.slice(WORKFLOW_STORAGE_PREFIX.byteLength);
+}
+
+function computeUpperBound(prefix: Uint8Array): Uint8Array {
+	const upperBound = prefix.slice();
+	for (let index = upperBound.length - 1; index >= 0; index--) {
+		if (upperBound[index] !== 0xff) {
+			upperBound[index]++;
+			return upperBound.slice(0, index + 1);
+		}
+	}
+
+	// Every workflow key begins with 6, so a finite upper bound always exists.
+	throw new Error("workflow storage prefix has no upper bound");
+}
+
+function normalizeSqlBlob(value: unknown): Uint8Array {
+	if (value instanceof Uint8Array) {
+		return value;
+	}
+	if (value instanceof ArrayBuffer) {
+		return new Uint8Array(value);
+	}
+	if (ArrayBuffer.isView(value)) {
+		return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+	}
+	if (Array.isArray(value)) {
+		const bytes = new Uint8Array(value.length);
+		for (const [index, byte] of value.entries()) {
+			if (!Number.isInteger(byte) || byte < 0 || byte > 255) {
+				throw new Error("workflow SQLite value was not a byte array");
+			}
+			bytes[index] = byte;
+		}
+		return bytes;
+	}
+	throw new Error("workflow SQLite value was not a blob");
+}
+
+function validateWrites(writes: KVWrite[]): void {
+	if (writes.length > WORKFLOW_SQLITE_MAX_BATCH_ROWS) {
+		throw new Error(
+			`Workflow batch contains ${writes.length} rows, exceeding the ${WORKFLOW_SQLITE_MAX_BATCH_ROWS} row limit`,
+		);
+	}
+
+	let batchBytes = 0;
+	for (const write of writes) {
+		if (write.value.byteLength > WORKFLOW_SQLITE_MAX_VALUE_BYTES) {
+			throw new Error(
+				`Workflow value is ${write.value.byteLength} bytes, exceeding the ${WORKFLOW_SQLITE_MAX_VALUE_BYTES} byte limit`,
+			);
+		}
+		batchBytes +=
+			WORKFLOW_STORAGE_PREFIX.byteLength +
+			write.key.byteLength +
+			write.value.byteLength;
+	}
+
+	if (batchBytes > WORKFLOW_SQLITE_MAX_BATCH_BYTES) {
+		throw new Error(
+			`Workflow batch is ${batchBytes} bytes, exceeding the ${WORKFLOW_SQLITE_MAX_BATCH_BYTES} byte limit`,
+		);
+	}
+}
+
+class WorkflowStorage {
+	#db: RawAccess;
+
+	constructor(db: RawAccess) {
+		this.#db = db;
+	}
+
+	async get(key: Uint8Array): Promise<Uint8Array | null> {
+		const rows = await this.#db.execute<{ value: unknown }>(
+			"SELECT value FROM _rivet_wf_kv WHERE key = ?",
+			prefixWorkflowKey(key),
+		);
+		const value = rows[0]?.value;
+		return value == null ? null : normalizeSqlBlob(value);
+	}
+
+	async set(key: Uint8Array, value: Uint8Array): Promise<void> {
+		await this.batch([{ key, value }], false);
+	}
+
+	async delete(key: Uint8Array): Promise<void> {
+		await this.#db.execute(
+			"DELETE FROM _rivet_wf_kv WHERE key = ?",
+			prefixWorkflowKey(key),
+		);
+	}
+
+	async deletePrefix(prefix: Uint8Array): Promise<void> {
+		const start = prefixWorkflowKey(prefix);
+		await this.#db.execute(
+			"DELETE FROM _rivet_wf_kv WHERE key >= ? AND key < ?",
+			start,
+			computeUpperBound(start),
+		);
+	}
+
+	async deleteRange(start: Uint8Array, end: Uint8Array): Promise<void> {
+		await this.#db.execute(
+			"DELETE FROM _rivet_wf_kv WHERE key >= ? AND key < ?",
+			prefixWorkflowKey(start),
+			prefixWorkflowKey(end),
+		);
+	}
+
+	async list(prefix: Uint8Array): Promise<KVEntry[]> {
+		const start = prefixWorkflowKey(prefix);
+		const rows = await this.#db.execute<{ key: unknown; value: unknown }>(
+			"SELECT key, value FROM _rivet_wf_kv WHERE key >= ? AND key < ? ORDER BY key ASC",
+			start,
+			computeUpperBound(start),
+		);
+		return rows.map((row) => ({
+			key: stripWorkflowKey(normalizeSqlBlob(row.key)),
+			value: normalizeSqlBlob(row.value),
+		}));
+	}
+
+	async batch(writes: KVWrite[], includeState: boolean): Promise<void> {
+		if (writes.length === 0) return;
+		validateWrites(writes);
+
+		const commit = async (tx: RawAccess) => {
+			for (const write of writes) {
+				await tx.execute(
+					WORKFLOW_UPSERT_SQL,
+					prefixWorkflowKey(write.key),
+					write.value,
+				);
+			}
+		};
+
+		if (includeState) {
+			await this.#db.transaction(commit, {
+				experimental: { includeState: true },
+			});
+		} else {
+			await this.#db.transaction(commit);
+		}
+	}
 }
 
 class ActorWorkflowMessageDriver implements WorkflowMessageDriver {
@@ -95,7 +263,7 @@ export class ActorWorkflowDriver implements EngineDriver {
 	readonly workerPollInterval = 100;
 	readonly messageDriver: WorkflowMessageDriver;
 	#runCtx: RunContext<any, any, any, any, any, any, any, any>;
-	#storage: WorkflowStorageHandle;
+	#storage: WorkflowStorage;
 	#queue: ActorQueue;
 	#run: ActorRun;
 
@@ -103,7 +271,7 @@ export class ActorWorkflowDriver implements EngineDriver {
 		this.#runCtx = runCtx;
 		this.messageDriver = new ActorWorkflowMessageDriver(runCtx);
 		this.#queue = runCtx.queue;
-		this.#storage = runCtx.storage.open(WORKFLOW_STORAGE_V1);
+		this.#storage = new WorkflowStorage(runCtx.db);
 		this.#run = runCtx.run;
 	}
 
@@ -132,9 +300,7 @@ export class ActorWorkflowDriver implements EngineDriver {
 	}
 
 	async batch(writes: KVWrite[]): Promise<void> {
-		if (writes.length === 0) return;
-
-		await track(this.#runCtx, this.#storage.flushWithState(writes));
+		await track(this.#runCtx, this.#storage.batch(writes, true));
 	}
 
 	async setAlarm(_workflowId: string, wakeAt: number): Promise<void> {
@@ -184,11 +350,11 @@ export class ActorWorkflowControlDriver implements EngineDriver {
 	readonly workerPollInterval = 100;
 	readonly messageDriver: WorkflowMessageDriver =
 		new NoopWorkflowMessageDriver();
-	#storage: WorkflowStorageHandle;
+	#storage: WorkflowStorage;
 	#run: ActorRun;
 
 	constructor(runCtx: RunContext<any, any, any, any, any, any, any, any>) {
-		this.#storage = runCtx.storage.open(WORKFLOW_STORAGE_V1);
+		this.#storage = new WorkflowStorage(runCtx.db);
 		this.#run = runCtx.run;
 	}
 
@@ -217,11 +383,7 @@ export class ActorWorkflowControlDriver implements EngineDriver {
 	}
 
 	async batch(writes: KVWrite[]): Promise<void> {
-		if (writes.length === 0) {
-			return;
-		}
-
-		await this.#storage.batch(writes);
+		await this.#storage.batch(writes, false);
 	}
 
 	async setAlarm(_workflowId: string, wakeAt: number): Promise<void> {

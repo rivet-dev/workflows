@@ -5,13 +5,12 @@ Durable, replayable workflows for Rivet Actors.
 [Documentation](https://rivet.dev/workflows/docs)
 
 ```ts
-import { actor } from "rivetkit";
 import { workflow } from "@rivet-dev/workflows";
 
-export const example = actor({
-	run: workflow(async (ctx) => {
+export const example = workflow({
+	run: async (ctx) => {
 		await ctx.step("hello", async () => "world");
-	}),
+	},
 });
 ```
 

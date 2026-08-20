@@ -20,13 +20,7 @@ export default defineConfig({
 				),
 			},
 			{
-				find: "rivetkit/storage",
-				replacement: fileURLToPath(
-					new URL("./tests/fixtures/rivetkit-storage.ts", import.meta.url),
-				),
-			},
-			{
-				find: "rivetkit/inspector/workflow",
+				find: "rivetkit/experimental/inspector/workflow",
 				replacement: fileURLToPath(
 					new URL(
 						"./tests/fixtures/rivetkit-inspector-workflow.ts",
