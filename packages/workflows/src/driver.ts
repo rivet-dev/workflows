@@ -27,7 +27,6 @@ export interface KVWrite {
  *
  * External systems may only enqueue messages through the configured message driver
  * (via WorkflowHandle.message()).
- * See architecture.md "Isolation Model" for details.
  */
 export interface EngineDriver {
 	/**

@@ -2,6 +2,8 @@
 
 Durable, replayable workflows for Rivet Actors.
 
+[Documentation](https://rivet.dev/workflows/docs)
+
 ```ts
 import { actor } from "rivetkit";
 import { workflow } from "@rivet-dev/workflows";
@@ -16,4 +18,3 @@ export const example = actor({
 The workflow storage format is owned and migrated by RivetKit. This package is
 a format-compatible client and never creates or migrates RivetKit's internal
 SQLite tables.
-
