@@ -1,56 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
 import { workflow } from "../../src/rivetkit/mod";
 import { getDefinedRunHandlerOptions } from "../fixtures/rivetkit";
-
-function compareBytes(a: Uint8Array, b: Uint8Array): number {
-	for (let index = 0; index < Math.min(a.length, b.length); index++) {
-		if (a[index] !== b[index]) return a[index] - b[index];
-	}
-	return a.length - b.length;
-}
-
-function startsWith(key: Uint8Array, prefix: Uint8Array): boolean {
-	return prefix.every((byte, index) => key[index] === byte);
-}
-
-type Write = { key: Uint8Array; value: Uint8Array };
+import { createTestDatabase } from "../fixtures/rivetkit-db";
 
 function createRunContext() {
-	const rows = new Map<string, { key: Uint8Array; value: Uint8Array }>();
-	const keyOf = (key: Uint8Array) => Buffer.from(key).toString("hex");
-	const apply = (writes: Write[]) => {
-		for (const write of writes) {
-			rows.set(keyOf(write.key), write);
-		}
-	};
-	const storage = {
-		get: async (key: Uint8Array) => rows.get(keyOf(key))?.value ?? null,
-		set: async (key: Uint8Array, value: Uint8Array) => apply([{ key, value }]),
-		delete: async (key: Uint8Array) => {
-			rows.delete(keyOf(key));
-		},
-		deletePrefix: async (prefix: Uint8Array) => {
-			for (const [key, row] of rows) {
-				if (startsWith(row.key, prefix)) rows.delete(key);
-			}
-		},
-		deleteRange: async (start: Uint8Array, end: Uint8Array) => {
-			for (const [key, row] of rows) {
-				if (
-					compareBytes(row.key, start) >= 0 &&
-					compareBytes(row.key, end) < 0
-				) {
-					rows.delete(key);
-				}
-			}
-		},
-		list: async (prefix: Uint8Array) =>
-			[...rows.values()]
-				.filter((row) => startsWith(row.key, prefix))
-				.sort((a, b) => compareBytes(a.key, b.key)),
-		batch: async (writes: Write[]) => apply(writes),
-		flushWithState: async (writes: Write[]) => apply(writes),
-	};
+	const { db, rows } = createTestDatabase();
 	const waitUntil: Promise<unknown>[] = [];
 	const setWakeAt = vi.fn(async () => {});
 	return {
@@ -68,7 +22,7 @@ function createRunContext() {
 				child: () => undefined,
 			},
 			abortSignal: new AbortController().signal,
-			storage: { open: () => storage },
+			db,
 			run: { setWakeAt },
 			queue: {
 				send: async () => {},
@@ -85,11 +39,30 @@ function createRunContext() {
 }
 
 describe("workflow RivetKit integration", () => {
-	test("publishes static Inspector metadata and disposes actor state", async () => {
+	test("returns an actor definition, forwards config, and disposes Inspector state", async () => {
 		const step = vi.fn(async () => "done");
-		const run = workflow(async (ctx) => {
-			await ctx.step("once", step);
+		const definition = workflow({
+			state: { count: 0 },
+			actions: {
+				getCount: (ctx) => ctx.state.count,
+			},
+			options: { sleepTimeout: 250 },
+			run: async (ctx) => {
+				await ctx.step("once", step);
+			},
 		});
+		expect(definition).toEqual({
+			config: expect.objectContaining({
+				state: { count: 0 },
+				actions: expect.any(Object),
+				options: { sleepTimeout: 250 },
+				run: expect.any(Function),
+			}),
+		});
+		const run = definition.config.run;
+		if (typeof run !== "function") {
+			throw new Error("workflow actor did not install a run handler");
+		}
 		const options = getDefinedRunHandlerOptions(run);
 		expect(options.inspectorKind).toBe("workflow");
 
@@ -121,5 +94,14 @@ describe("workflow RivetKit integration", () => {
 			control: { run: { withInactive } },
 		});
 		expect(nextRegistration.inspector.workflow).not.toBe(firstAdapter);
+	});
+
+	test("rejects a custom database provider", () => {
+		expect(() =>
+			workflow({
+				run: async () => {},
+				db: {},
+			} as never),
+		).toThrow("workflow() does not support a custom database provider");
 	});
 });

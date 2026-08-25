@@ -9,15 +9,14 @@ pnpm add @rivet-dev/workflows rivetkit
 ```
 
 ```ts
-import { actor } from "rivetkit";
 import { workflow } from "@rivet-dev/workflows";
 
-export const report = actor({
-	run: workflow(async (ctx) => {
+export const report = workflow({
+	run: async (ctx) => {
 		await ctx.step("generate", async (step) => {
 			step.log.info("generating report");
 		});
-	}),
+	},
 });
 ```
 

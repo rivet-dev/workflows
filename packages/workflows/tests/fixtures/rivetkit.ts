@@ -2,6 +2,17 @@ type AnyFunction = (...args: any[]) => any;
 
 const optionsByRun = new WeakMap<AnyFunction, unknown>();
 
+export function actor<TConfig>(config: TConfig): { config: TConfig } {
+	return { config };
+}
+
+export function queue<TMessage, TComplete = never>(): {
+	readonly _queueMessage?: TMessage;
+	readonly _queueComplete?: TComplete;
+} {
+	return {};
+}
+
 export class RivetError extends Error {
 	group: string;
 	code: string;

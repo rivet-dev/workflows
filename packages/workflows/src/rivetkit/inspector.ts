@@ -1,9 +1,9 @@
-import * as transport from "rivetkit/inspector/workflow";
+import * as transport from "rivetkit/experimental/inspector/workflow";
 import {
 	encodeWorkflowHistoryTransport,
 	encodeWorkflowInspectorValue,
 	type WorkflowInspectorAdapter,
-} from "rivetkit/inspector/workflow";
+} from "rivetkit/experimental/inspector/workflow";
 import type {
 	BranchStatus,
 	BranchStatusType,

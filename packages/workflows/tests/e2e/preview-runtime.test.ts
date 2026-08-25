@@ -1,11 +1,11 @@
-import { actor, setup } from "rivetkit";
+import { setup } from "rivetkit";
 import { setupTest } from "rivetkit/test";
 import { expect, test } from "vitest";
 import { workflow } from "../../src/rivetkit/mod";
 
-const sleepAcrossWake = actor({
+const sleepAcrossWake = workflow({
 	state: { completed: [] as string[] },
-	run: workflow(async (ctx) => {
+	run: async (ctx) => {
 		await ctx.step("before-sleep", async (step) => {
 			step.state.completed.push("before-sleep");
 		});
@@ -13,7 +13,7 @@ const sleepAcrossWake = actor({
 		await ctx.step("after-sleep", async (step) => {
 			step.state.completed.push("after-sleep");
 		});
-	}),
+	},
 	actions: {
 		getCompleted: (ctx) => ctx.state.completed,
 	},
