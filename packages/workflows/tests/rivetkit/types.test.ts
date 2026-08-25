@@ -1,6 +1,6 @@
 import { type AnyActorDefinition, queue } from "rivetkit";
 import type { ActorHandle } from "rivetkit/client";
-import type { RawAccess } from "rivetkit/db";
+import type { DatabaseProvider, RawAccess } from "rivetkit/db";
 import { describe, expectTypeOf, test } from "vitest";
 import {
 	type WorkflowContextOf,
@@ -35,9 +35,25 @@ type HasWorkflowAction =
 		? true
 		: false;
 
-function customDatabaseIsRejected() {
+const customDatabase: DatabaseProvider<RawAccess> = {
+	createClient: async () => {
+		throw new Error("type-only database provider");
+	},
+	onMigrate: async () => {},
+};
+
+const customDatabaseDefinition = workflow({
+	db: customDatabase,
+	run: async (ctx) => {
+		await ctx.step("custom-database", async (step) => {
+			expectTypeOf(step.db).toEqualTypeOf<RawAccess>();
+		});
+	},
+});
+
+function invalidDatabaseIsRejected() {
 	workflow({
-		// @ts-expect-error Workflows requires RivetKit's standard embedded database.
+		// @ts-expect-error Workflows requires a valid RivetKit database provider.
 		db: {},
 		run: async () => {},
 	});
@@ -53,6 +69,7 @@ describe("workflow actor types", () => {
 		expectTypeOf<
 			WorkflowStepContextOf<typeof definition>["state"]
 		>().toEqualTypeOf<{ count: number }>();
-		expectTypeOf(customDatabaseIsRejected).toBeFunction();
+		expectTypeOf(customDatabaseDefinition).toMatchTypeOf<AnyActorDefinition>();
+		expectTypeOf(invalidDatabaseIsRejected).toBeFunction();
 	});
 });

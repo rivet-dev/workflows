@@ -8,7 +8,9 @@ Use workflows for durable, multi-step execution with replay safety.
 
 ## What are workflows?
 
-A workflow is a durable, replayable run handler.
+A workflow is a durable, replayable actor definition. It supports the full actor
+configuration, including actions and lifecycle hooks, while its `run` function
+uses replay-safe workflow primitives.
 
 - Survives restarts: workflow progress is saved automatically.
 - Re-runs safely: replay follows the same recorded steps.
