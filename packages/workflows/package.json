@@ -1,0 +1,76 @@
+{
+	"name": "@rivet-dev/workflows",
+	"version": "2.3.10",
+	"description": "Durable, replayable workflows for Rivet Actors",
+	"license": "Apache-2.0",
+	"keywords": [
+		"rivet",
+		"workflow",
+		"durable",
+		"reentrant",
+		"stateful"
+	],
+	"files": [
+		"dist",
+		"schemas",
+		"README.md",
+		"package.json"
+	],
+	"type": "module",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/tsup/index.d.ts",
+				"default": "./dist/tsup/index.js"
+			},
+			"require": {
+				"types": "./dist/tsup/index.d.cts",
+				"default": "./dist/tsup/index.cjs"
+			}
+		},
+		"./testing": {
+			"import": {
+				"types": "./dist/tsup/testing.d.ts",
+				"default": "./dist/tsup/testing.js"
+			},
+			"require": {
+				"types": "./dist/tsup/testing.d.cts",
+				"default": "./dist/tsup/testing.cjs"
+			}
+		}
+	},
+	"engines": {
+		"node": ">=22"
+	},
+	"sideEffects": false,
+	"scripts": {
+		"build": "pnpm compile:bare && tsup",
+		"compile:bare": "tsx scripts/compile-bare.ts compile schemas/v1.bare -o dist/schemas/v1.ts",
+		"check-types": "pnpm compile:bare && tsc --noEmit",
+		"test": "pnpm compile:bare && vitest run",
+		"test:e2e": "pnpm compile:bare && vitest run --config vitest.e2e.config.ts",
+		"test:watch": "vitest"
+	},
+	"dependencies": {
+		"@rivetkit/bare-ts": "^0.6.2",
+		"cbor-x": "^1.6.0",
+		"fdb-tuple": "^1.0.0",
+		"pino": "^9.6.0",
+		"vbare": "^0.0.4"
+	},
+	"peerDependencies": {
+		"rivetkit": ">=2.4.0 <3"
+	},
+	"devDependencies": {
+		"@bare-ts/tools": "^0.13.0",
+		"@types/node": "^22.13.1",
+		"commander": "^12.0.0",
+		"legacy-rivetkit": "npm:rivetkit@2.3.7",
+		"legacy-workflow-engine": "npm:@rivetkit/workflow-engine@2.3.7",
+		"rivetkit": "0.0.0-feat-workflows-public-host-apis.0ff6164",
+		"tsup": "^8.4.0",
+		"tsx": "^4.7.0",
+		"typescript": "^5.7.3",
+		"vitest": "^3.1.1"
+	}
+}
