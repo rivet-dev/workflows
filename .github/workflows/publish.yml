@@ -60,6 +60,9 @@ jobs:
           mkdir -p .pack
           npm pack ./packages/workflows --silent --pack-destination .pack
       - name: Publish
+        env:
+          # setup-node provides a dummy token; clear it so npm uses OIDC.
+          NODE_AUTH_TOKEN: ""
         run: >-
           npm publish
           .pack/rivet-dev-workflows-${{ steps.release.outputs.version }}.tgz
