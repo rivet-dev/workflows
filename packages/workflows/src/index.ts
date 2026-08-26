@@ -154,6 +154,7 @@ import {
 import {
 	CriticalError,
 	EvictedError,
+	HistoryDivergedError,
 	MessageWaitError,
 	RollbackCheckpointError,
 	RollbackError,
@@ -993,6 +994,7 @@ async function executeWorkflow<TInput, TOutput>(
 
 	try {
 		const output = await workflowFn(ctx, effectiveInput);
+		ctx.validateComplete();
 
 		storage.state = "completed";
 		storage.output = output;
@@ -1035,7 +1037,10 @@ async function executeWorkflow<TInput, TOutput>(
 			);
 		}
 
-		if (error instanceof RollbackCheckpointError) {
+		if (
+			error instanceof HistoryDivergedError ||
+			error instanceof RollbackCheckpointError
+		) {
 			await setFailedState(storage, driver, error, historyNotifier);
 			if (onError && !isErrorReported(error)) {
 				await notifyError(onError, logger, {
