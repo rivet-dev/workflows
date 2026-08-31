@@ -565,29 +565,20 @@ export class WorkflowContextImpl implements WorkflowContextInterface {
 	}
 
 	/**
-	 * Validate that all expected entries in the branch were visited.
-	 * Throws HistoryDivergedError if there are unvisited entries.
+	 * Validate that every direct entry in this scope was visited. Nested scopes
+	 * validate their own entries when they execute.
 	 */
 	validateComplete(): void {
-		const prefix = locationToKey(this.storage, this.currentLocation);
+		for (const [key, entry] of this.storage.history.entries) {
+			const isDirectChild =
+				entry.location.length === this.currentLocation.length + 1 &&
+				isLocationPrefix(this.currentLocation, entry.location);
 
-		for (const key of this.storage.history.entries.keys()) {
-			// Check if this key is under our current location prefix
-			// Handle root prefix (empty string) specially - all keys are under root
-			const isUnderPrefix =
-				prefix === ""
-					? true // Root: all keys are children
-					: key.startsWith(`${prefix}/`) || key === prefix;
-
-			if (isUnderPrefix) {
-				if (!this.visitedKeys.has(key)) {
-					// Entry exists in history but wasn't visited
-					// This means workflow code may have changed
-					throw new HistoryDivergedError(
-						`Entry "${key}" exists in history but was not visited. ` +
-							`Workflow code may have changed. Use ctx.removed() to handle migrations.`,
-					);
-				}
+			if (isDirectChild && !this.visitedKeys.has(key)) {
+				throw new HistoryDivergedError(
+					`Entry "${key}" exists in history but was not visited. ` +
+						"Workflow code may have changed. Use ctx.removed() to handle migrations.",
+				);
 			}
 		}
 	}
@@ -791,6 +782,13 @@ export class WorkflowContextImpl implements WorkflowContextInterface {
 
 		// Check for duplicate name in current execution
 		this.checkDuplicateName(config.name);
+		const parentKey = locationToKey(this.storage, this.currentLocation);
+		const candidateKey = parentKey
+			? `${parentKey}/${config.name}`
+			: config.name;
+		if (!this.storage.history.entries.has(candidateKey)) {
+			this.validateComplete();
+		}
 
 		const location = appendName(
 			this.storage,
@@ -2558,6 +2556,14 @@ export class WorkflowContextImpl implements WorkflowContextInterface {
 
 		// Mark this entry as visited for validateComplete
 		this.markVisited(key);
+		if (originalType === "message") {
+			const generatedKeyPrefix = `${key}:`;
+			for (const existingKey of this.storage.history.entries.keys()) {
+				if (existingKey.startsWith(generatedKeyPrefix)) {
+					this.markVisited(existingKey);
+				}
+			}
+		}
 
 		this.stopRollbackIfMissing(existing);
 

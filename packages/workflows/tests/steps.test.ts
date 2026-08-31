@@ -6,6 +6,7 @@ import {
 	EntryInProgressError,
 	HistoryDivergedError,
 	InMemoryDriver,
+	loadStorage,
 	RollbackError,
 	runWorkflow,
 	StepExhaustedError,
@@ -73,6 +74,28 @@ for (const mode of modes) {
 			await runWorkflow("wf-1", workflow, undefined, driver, { mode })
 				.result;
 			expect(callCount).toBe(1);
+		});
+		it("should reject a renamed root step on replay", async () => {
+			const originalWorkflow = async (ctx: WorkflowContextInterface) => {
+				return await ctx.step("original-step-name", async () => "original");
+			};
+			const renamedWorkflow = async (ctx: WorkflowContextInterface) => {
+				return await ctx.step("renamed-step-name", async () => "changed");
+			};
+
+			await runWorkflow("wf-1", originalWorkflow, undefined, driver, { mode })
+				.result;
+
+			await expect(
+				runWorkflow("wf-1", renamedWorkflow, undefined, driver, { mode })
+					.result,
+			).rejects.toThrow(HistoryDivergedError);
+			const storage = await loadStorage(driver);
+			expect(storage.nameRegistry).toEqual(["original-step-name"]);
+			expect([...storage.history.entries.keys()]).toEqual([
+				"original-step-name",
+			]);
+			expect(storage.state).not.toBe("completed");
 		});
 
 		it("should replay void step on restart", async () => {
