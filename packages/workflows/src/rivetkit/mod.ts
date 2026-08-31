@@ -10,6 +10,7 @@ import {
 	type RunContext,
 	type RunControl,
 } from "rivetkit";
+import type { AnyDatabaseProvider } from "rivetkit/db";
 import { isActorAbortedError } from "rivetkit/errors";
 import { stringifyError } from "rivetkit/utils";
 import {
@@ -107,16 +108,86 @@ function isRunHandlerUnavailable(error: unknown): boolean {
 	);
 }
 
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
-	? Omit<T, K>
+export interface WorkflowOptions<
+	TState,
+	TConnParams,
+	TConnState,
+	TVars,
+	TInput,
+	TDatabase extends AnyDatabaseProvider,
+	TEvents extends EventSchemaConfig = Record<never, never>,
+	TQueues extends QueueSchemaConfig = Record<never, never>,
+> {
+	onError?: (
+		ctx: RunContext<
+			TState,
+			TConnParams,
+			TConnState,
+			TVars,
+			TInput,
+			TDatabase,
+			TEvents,
+			TQueues
+		>,
+		event: WorkflowErrorEvent,
+	) => void | Promise<void>;
+}
+
+export type WorkflowRunFunction<
+	TState,
+	TConnParams,
+	TConnState,
+	TVars,
+	TInput,
+	TDatabase extends AnyDatabaseProvider,
+	TEvents extends EventSchemaConfig = Record<never, never>,
+	TQueues extends QueueSchemaConfig = Record<never, never>,
+> = (
+	ctx: WorkflowContext<
+		TState,
+		TConnParams,
+		TConnState,
+		TVars,
+		TInput,
+		TDatabase,
+		TEvents,
+		TQueues
+	>,
+) => Promise<unknown>;
+
+type WorkflowRunHandler<
+	TState,
+	TConnParams,
+	TConnState,
+	TVars,
+	TInput,
+	TDatabase extends AnyDatabaseProvider,
+	TEvents extends EventSchemaConfig = Record<never, never>,
+	TQueues extends QueueSchemaConfig = Record<never, never>,
+> = (
+	c: RunContext<
+		TState,
+		TConnParams,
+		TConnState,
+		TVars,
+		TInput,
+		TDatabase,
+		TEvents,
+		TQueues
+	>,
+) => Promise<void>;
+
+type DistributiveOmit<T, TKey extends PropertyKey> = T extends unknown
+	? Omit<T, TKey>
 	: never;
 
-export type WorkflowActorConfig<
+export type WorkflowConfigInput<
 	TState = undefined,
 	TConnParams = undefined,
 	TConnState = undefined,
 	TVars = undefined,
 	TInput = undefined,
+	TDatabase extends AnyDatabaseProvider = undefined,
 	TEvents extends EventSchemaConfig = Record<never, never>,
 	TQueues extends QueueSchemaConfig = Record<never, never>,
 	TActions extends Actions<
@@ -125,7 +196,7 @@ export type WorkflowActorConfig<
 		TConnState,
 		TVars,
 		TInput,
-		undefined,
+		TDatabase,
 		TEvents,
 		TQueues
 	> = Record<never, never>,
@@ -136,96 +207,66 @@ export type WorkflowActorConfig<
 		TConnState,
 		TVars,
 		TInput,
-		undefined,
+		TDatabase,
 		TEvents,
 		TQueues,
 		TActions
 	>,
-	"run" | "db"
+	"run"
 > & {
-	run: (
-		ctx: WorkflowContext<
-			TState,
-			TConnParams,
-			TConnState,
-			TVars,
-			TInput,
-			undefined,
-			TEvents,
-			TQueues
-		>,
-	) => Promise<unknown>;
-	onError?: (
-		ctx: RunContext<
-			TState,
-			TConnParams,
-			TConnState,
-			TVars,
-			TInput,
-			undefined,
-			TEvents,
-			TQueues
-		>,
-		event: WorkflowErrorEvent,
-	) => void | Promise<void>;
-};
-
-export function workflow<
-	TState = undefined,
-	TConnParams = undefined,
-	TConnState = undefined,
-	TVars = undefined,
-	TInput = undefined,
-	TEvents extends EventSchemaConfig = Record<never, never>,
-	TQueues extends QueueSchemaConfig = Record<never, never>,
-	TActions extends Actions<
+	run: WorkflowRunFunction<
 		TState,
 		TConnParams,
 		TConnState,
 		TVars,
 		TInput,
-		undefined,
+		TDatabase,
 		TEvents,
 		TQueues
-	> = Record<never, never>,
->(
-	config: WorkflowActorConfig<
-		TState,
-		TConnParams,
-		TConnState,
-		TVars,
-		TInput,
-		TEvents,
-		TQueues,
-		Actions<
-			TState,
-			TConnParams,
-			TConnState,
-			TVars,
-			TInput,
-			undefined,
-			TEvents,
-			TQueues
-		>
-	> & { actions?: TActions },
-): ActorDefinition<
+	>;
+};
+
+function createWorkflowRunHandler<
 	TState,
 	TConnParams,
 	TConnState,
 	TVars,
 	TInput,
-	undefined,
+	TDatabase extends AnyDatabaseProvider,
+	TEvents extends EventSchemaConfig = Record<never, never>,
+	TQueues extends QueueSchemaConfig = Record<never, never>,
+>(
+	fn: WorkflowRunFunction<
+		TState,
+		TConnParams,
+		TConnState,
+		TVars,
+		TInput,
+		TDatabase,
+		TEvents,
+		TQueues
+	>,
+	options: WorkflowOptions<
+		TState,
+		TConnParams,
+		TConnState,
+		TVars,
+		TInput,
+		TDatabase,
+		TEvents,
+		TQueues
+	> = {},
+): WorkflowRunHandler<
+	TState,
+	TConnParams,
+	TConnState,
+	TVars,
+	TInput,
+	TDatabase,
 	TEvents,
-	TQueues,
-	TActions
+	TQueues
 > {
-	if (Object.hasOwn(config, "db")) {
-		throw new TypeError(
-			"workflow() does not support a custom database provider",
-		);
-	}
-
-	const { run: workflowRun, onError, ...actorConfig } = config;
+	const onError = options.onError;
 	const workflowInspectors = new Map<
 		string,
 		ReturnType<typeof createWorkflowInspectorAdapter>
@@ -240,6 +281,7 @@ export function workflow<
 		}
 		return workflowInspector;
 	}
+
 	async function run(
 		runCtx: RunContext<
 			TState,
@@ -247,7 +289,7 @@ export function workflow<
 			TConnState,
 			TVars,
 			TInput,
-			undefined,
+			TDatabase,
 			TEvents,
 			TQueues
 		>,
@@ -293,7 +335,7 @@ export function workflow<
 
 		const handle = runWorkflow(
 			runCtx.actorId,
-			async (ctx) => await workflowRun(new WorkflowContext(ctx, runCtx)),
+			async (ctx) => await fn(new WorkflowContext(ctx, runCtx)),
 			undefined,
 			driver,
 			{
@@ -346,7 +388,7 @@ export function workflow<
 		}
 	}
 
-	const runHandler = defineRunHandler(run, {
+	return defineRunHandler(run, {
 		icon: "diagram-project",
 		inspectorKind: "workflow",
 		createInspector: ({ actorId, control }) => {
@@ -365,19 +407,133 @@ export function workflow<
 			};
 		},
 	});
+}
 
-	return actor<
+export function workflow<
+	TState = undefined,
+	TConnParams = undefined,
+	TConnState = undefined,
+	TVars = undefined,
+	TInput = undefined,
+	TDatabase extends AnyDatabaseProvider = undefined,
+	TEvents extends EventSchemaConfig = Record<never, never>,
+	TQueues extends QueueSchemaConfig = Record<never, never>,
+	TActions extends Actions<
 		TState,
 		TConnParams,
 		TConnState,
 		TVars,
 		TInput,
-		undefined,
+		TDatabase,
+		TEvents,
+		TQueues
+	> = Record<never, never>,
+>(
+	input: WorkflowConfigInput<
+		TState,
+		TConnParams,
+		TConnState,
+		TVars,
+		TInput,
+		TDatabase,
 		TEvents,
 		TQueues,
-		TActions
-	>({
-		...actorConfig,
-		run: runHandler,
+		Actions<
+			TState,
+			TConnParams,
+			TConnState,
+			TVars,
+			TInput,
+			TDatabase,
+			TEvents,
+			TQueues
+		>
+	> & { actions?: TActions },
+	options?: WorkflowOptions<
+		TState,
+		TConnParams,
+		TConnState,
+		TVars,
+		TInput,
+		TDatabase,
+		TEvents,
+		TQueues
+	>,
+): ActorDefinition<
+	TState,
+	TConnParams,
+	TConnState,
+	TVars,
+	TInput,
+	TDatabase,
+	TEvents,
+	TQueues,
+	TActions
+>;
+
+/**
+ * @deprecated Pass the complete actor config to `workflow({ run, ... })`
+ * instead of wrapping `workflow(run)` in `actor({ run: ... })`.
+ */
+export function workflow<
+	TState = undefined,
+	TConnParams = undefined,
+	TConnState = undefined,
+	TVars = undefined,
+	TInput = undefined,
+	TDatabase extends AnyDatabaseProvider = undefined,
+	TEvents extends EventSchemaConfig = Record<never, never>,
+	TQueues extends QueueSchemaConfig = Record<never, never>,
+>(
+	run: WorkflowRunFunction<
+		TState,
+		TConnParams,
+		TConnState,
+		TVars,
+		TInput,
+		TDatabase,
+		TEvents,
+		TQueues
+	>,
+	options?: WorkflowOptions<
+		TState,
+		TConnParams,
+		TConnState,
+		TVars,
+		TInput,
+		TDatabase,
+		TEvents,
+		TQueues
+	>,
+): WorkflowRunHandler<
+	TState,
+	TConnParams,
+	TConnState,
+	TVars,
+	TInput,
+	TDatabase,
+	TEvents,
+	TQueues
+>;
+
+export function workflow(
+	input:
+		| WorkflowConfigInput<any, any, any, any, any, any, any, any, any>
+		| WorkflowRunFunction<any, any, any, any, any, any, any, any>,
+	options: WorkflowOptions<any, any, any, any, any, any, any, any> = {},
+):
+	| ActorDefinition<any, any, any, any, any, any, any, any, any>
+	| WorkflowRunHandler<any, any, any, any, any, any, any, any> {
+	if (typeof input === "function") {
+		return createWorkflowRunHandler(input, options);
+	}
+
+	// RivetKit's `types` field exists only for inference and is not accepted by
+	// its strict runtime config schema.
+	const { run, types: typeOnly, ...actorInput } = input;
+	void typeOnly;
+	return actor({
+		...actorInput,
+		run: createWorkflowRunHandler(run, options),
 	});
 }

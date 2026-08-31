@@ -23,7 +23,13 @@ describe("workflow Inspector adapter", () => {
 
 	test("delegates state and replay through actor-bound callbacks", async () => {
 		const inspector = createWorkflowInspectorAdapter();
-		const history = new Uint8Array([1, 2, 3]).buffer;
+		inspector.update({
+			nameRegistry: [],
+			entries: [],
+			entryMetadata: new Map(),
+		});
+		const history = inspector.adapter.getHistory();
+		if (!history) throw new Error("expected encoded workflow history");
 		const replay = vi.fn(async () => history);
 		inspector.setGetState(async () => "sleeping");
 		inspector.setReplayFromStep(replay);

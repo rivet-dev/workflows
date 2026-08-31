@@ -59,7 +59,7 @@ try {
 			"packed manifest contains an unresolved workspace/catalog specifier",
 		);
 	}
-	if (manifest.peerDependencies?.rivetkit !== ">=2.4.0 <3") {
+	if (manifest.peerDependencies?.rivetkit !== ">=2.3.11 <2.4.0") {
 		throw new Error("packed manifest has the wrong RivetKit peer range");
 	}
 	if (manifest.dependencies?.rivetkit) {
@@ -125,8 +125,9 @@ try {
 		await writeFile(
 			join(fixture, "smoke.ts"),
 			[
-				'import { workflow } from "@rivet-dev/workflows";',
+				'import { actor, setup, workflow } from "@rivet-dev/workflows";',
 				'import { InMemoryDriver } from "@rivet-dev/workflows/testing";',
+				"const worker = actor({ actions: { ping: () => 'pong' } });",
 				"const definition = workflow({",
 				"  state: { count: 0 },",
 				"  actions: { getCount: (c) => c.state.count },",
@@ -139,7 +140,8 @@ try {
 				"    });",
 				"  },",
 				"});",
-				"void definition; void new InMemoryDriver();",
+				"const registry = setup({ use: { definition, worker } });",
+				"void registry; void new InMemoryDriver();",
 			].join("\n"),
 		);
 		await writeFile(

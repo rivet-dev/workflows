@@ -2,6 +2,7 @@ import * as transport from "rivetkit/experimental/inspector/workflow";
 import {
 	encodeWorkflowHistoryTransport,
 	encodeWorkflowInspectorValue,
+	type WorkflowHistoryBytes,
 	type WorkflowInspectorAdapter,
 } from "rivetkit/experimental/inspector/workflow";
 import type {
@@ -21,7 +22,7 @@ function assertUnreachable(value: never): never {
 	throw new Error(`Unexpected workflow Inspector value: ${String(value)}`);
 }
 
-type HistoryListener = (history: ArrayBuffer) => void;
+type HistoryListener = (history: WorkflowHistoryBytes) => void;
 
 function createHistoryEmitter() {
 	const listeners = new Set<HistoryListener>();
@@ -31,7 +32,7 @@ function createHistoryEmitter() {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		},
-		emit: (history: ArrayBuffer) => {
+		emit: (history: WorkflowHistoryBytes) => {
 			for (const listener of listeners) {
 				listener(history);
 			}
@@ -44,16 +45,17 @@ export function createWorkflowInspectorAdapter(): {
 	update: (snapshot: WorkflowHistorySnapshot) => void;
 	setGetState: (fn: () => Promise<WorkflowState | null>) => void;
 	setReplayFromStep: (
-		fn: (entryId?: string) => Promise<ArrayBuffer | null>,
+		fn: (entryId?: string) => Promise<WorkflowHistoryBytes | null>,
 	) => void;
 } {
 	const emitter = createHistoryEmitter();
-	let history: ArrayBuffer | null = null;
+	let history: WorkflowHistoryBytes | null = null;
 	let getState: () => Promise<WorkflowState | null> = async () => null;
-	let replayFromStep: (entryId?: string) => Promise<ArrayBuffer | null> =
-		async () => {
-			throw new Error("Workflow replay controls are not initialized");
-		};
+	let replayFromStep: (
+		entryId?: string,
+	) => Promise<WorkflowHistoryBytes | null> = async () => {
+		throw new Error("Workflow replay controls are not initialized");
+	};
 
 	const adapter: WorkflowInspectorAdapter = {
 		getHistory: () => history,
