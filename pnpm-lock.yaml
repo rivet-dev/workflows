@@ -15,6 +15,22 @@ importers:
         specifier: ^4.20.6
         version: 4.23.12
 
+  examples/docs:
+    dependencies:
+      '@rivet-dev/workflows':
+        specifier: workspace:*
+        version: link:../../packages/workflows
+      rivetkit:
+        specifier: 2.3.11
+        version: 2.3.11(better-sqlite3@12.11.1)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+
   packages/workflows:
     dependencies:
       '@rivetkit/bare-ts':

@@ -1,0 +1,12 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"baseUrl": "../..",
+		"paths": {
+			"@rivet-dev/workflows": ["packages/workflows/src/mod.ts"]
+		},
+		"types": ["node"]
+	},
+	"include": ["actors-workflows/**/*.ts"]
+}
