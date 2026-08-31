@@ -1,0 +1,16 @@
+{
+	"name": "@rivet-dev/workflows-docs-examples",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"check-types": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@rivet-dev/workflows": "workspace:*",
+		"rivetkit": "2.3.11"
+	},
+	"devDependencies": {
+		"@types/node": "^22.13.1",
+		"typescript": "^5.7.3"
+	}
+}
