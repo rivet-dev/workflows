@@ -8,5 +8,5 @@
 		},
 		"types": ["node"]
 	},
-	"include": ["actors-workflows/**/*.ts"]
+	"include": ["actors-workflows/**/*.ts", "guides/**/*.ts"]
 }
