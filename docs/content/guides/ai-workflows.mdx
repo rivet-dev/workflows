@@ -1,0 +1,44 @@
+---
+title: "Multi-Step AI Workflows"
+description: "Chain LLM calls and tool calls into one job that picks up at the failed step after a crash or a rate-limit error."
+---
+
+<Diagram
+  id="ai-workflows"
+  label="Your app posts a job to the /jobs route of your HTTP server, which calls send on the workflow for that job and returns right away. The workflow runs one recorded step per call: LLM steps that extract and summarize, tool steps that enrich the data from your APIs, and a final step that publishes the result to your CMS. A failed step retries with backoff, and after a crash the workflow resumes at the step that failed. The workflow broadcasts progress events back to your app. The numbers show the order of the calls. There is one workflow per job."
+  stackLabel="One per job"
+  nodes={[
+    { id: "app", x: 20, y: 120, w: 150, title: "Your app", subtitle: "submits a job" },
+    { id: "server", kind: "group", x: 300, y: 98, w: 170, h: 84, title: "HTTP server" },
+    { id: "jobs", kind: "slot", x: 315, y: 132, w: 140, h: 36, title: "`/jobs`" },
+    { id: "job", x: 600, y: 120, product: "workflows", stack: true, title: "`aiJob`", subtitle: "recorded steps" },
+    { id: "llm", x: 920, y: 30, title: "LLM provider", subtitle: "OpenAI, Anthropic" },
+    { id: "tools", x: 920, y: 120, title: "Your APIs", subtitle: "search, CRM, data" },
+    { id: "cms", x: 920, y: 210, title: "CMS", subtitle: "publishes the result" },
+  ]}
+  edges={[
+    { from: "app", to: "jobs", label: "new job", step: 1 },
+    { from: "jobs", to: "job", label: "`send`", step: 2 },
+    { from: "job", to: "llm", fromSide: "top", via: [[685, 60]], label: "LLM step", step: 3 },
+    { from: "job", to: "tools", label: "tool step", step: 4 },
+    { from: "job", to: "cms", fromSide: "bottom", fromOffset: 30, via: [[715, 240]], label: "publish step", step: 5 },
+    { from: "job", to: "app", kind: "reply", fromSide: "bottom", toSide: "bottom", fromOffset: -30, via: [[655, 310], [95, 310]], label: "progress events", step: 6 },
+  ]}
+  notes={[{ x: 730, y: 285, text: "Failed steps retry with backoff." }]}
+/>
+
+## TODO
+
+This page is not written yet. The outline below is what it will cover.
+
+### What we'll build
+
+- An `aiJob` workflow per job that runs extract, enrich, summarize, and publish as separate recorded steps.
+- LLM steps that retry with backoff when the provider returns a rate-limit or server error.
+- Tool steps that call your own APIs to add data between LLM calls.
+- A `/jobs` route that starts a job and returns its id right away.
+- Progress events that let your app show which step a job is on.
+
+### Similar tools
+
+This is the same job as Vercel Workflow DevKit, Inngest, Trigger.dev, Temporal, or Cloudflare Workflows. On Rivet the workflow runs inside an Actor, so each job also has its own state and SQLite database and can push progress to connected clients without a separate pub/sub service.

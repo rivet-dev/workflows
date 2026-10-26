@@ -1,0 +1,41 @@
+---
+title: "Human-in-the-Loop Approvals"
+description: "Pause a workflow or an agent's tool call until a person approves or rejects it, even if the answer takes days."
+---
+
+<Diagram
+  id="human-in-the-loop"
+  label="Your app, or an agent that wants to run a sensitive tool, calls send on the approval workflow for that request. The workflow records the request and posts a message with Approve and Reject buttons to the approver in Slack or by email. It then waits on its decision queue, raced against a timeout, without holding a server. When the approver clicks a button, Slack posts to the /approvals route of your HTTP server, which calls send with the decision. On approve the workflow runs the action against your API; on reject or timeout it records the outcome and stops. The numbers show the order of the calls. There is one workflow per approval request."
+  stackLabel="One per approval request"
+  nodes={[
+    { id: "app", x: 20, y: 40, w: 150, title: "App or agent", subtitle: "asks to act" },
+    { id: "approver", x: 20, y: 170, w: 150, title: "Approver", subtitle: "Slack or email" },
+    { id: "server", kind: "group", x: 300, y: 148, w: 170, h: 84, title: "HTTP server" },
+    { id: "approvals", kind: "slot", x: 315, y: 182, w: 140, h: 36, title: "`/approvals`" },
+    { id: "approval", x: 600, y: 170, product: "workflows", stack: true, title: "`approval`", subtitle: "decision or timeout" },
+    { id: "api", x: 920, y: 170, title: "Your API", subtitle: "runs the action" },
+  ]}
+  edges={[
+    { from: "app", to: "approval", toSide: "top", via: [[685, 70]], label: "`send` request", step: 1 },
+    { from: "approval", to: "approver", fromSide: "bottom", toSide: "bottom", via: [[685, 290], [95, 290]], label: "notify with Approve and Reject", step: 2 },
+    { from: "approver", to: "approvals", label: "button click", step: 3 },
+    { from: "approvals", to: "approval", label: "`send` decision", step: 4 },
+    { from: "approval", to: "api", label: "on approve", step: 5 },
+  ]}
+/>
+
+## TODO
+
+This page is not written yet. The outline below is what it will cover.
+
+### What we'll build
+
+- An `approval` workflow per request that records what is being asked and who must answer.
+- A Slack message, or an email with links, that shows the request with Approve and Reject buttons.
+- A durable wait on the decision queue that can last for days without a running server.
+- A timeout path that rejects the request and tells the requester when no one answers.
+- The same gate wrapped around an agent's tool call, so the tool runs only after a person approves it.
+
+### Similar tools
+
+This is the same job as Vercel Workflow hooks, Inngest `waitForEvent`, Temporal signals, Cloudflare Workflows `waitForEvent`, or LangGraph interrupts. On Rivet the pending request is an Actor addressed by its key, so the button handler sends the decision straight to it, and the request's state stays readable while it waits.

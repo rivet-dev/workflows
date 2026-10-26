@@ -53,5 +53,28 @@
 				}
 			]
 		}
+	],
+	"guides": [
+		{
+			"title": "Workflows",
+			"pages": [
+				{
+					"title": "Multi-Step AI Workflows",
+					"href": "/guides/ai-workflows"
+				},
+				{
+					"title": "Human-in-the-Loop Approvals",
+					"href": "/guides/human-in-the-loop"
+				},
+				{
+					"title": "Handle Incoming Webhooks",
+					"href": "/guides/handle-webhooks"
+				},
+				{
+					"title": "Reliable Webhook Delivery",
+					"href": "/guides/webhook-delivery"
+				}
+			]
+		}
 	]
 }

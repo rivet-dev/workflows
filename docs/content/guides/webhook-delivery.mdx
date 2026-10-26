@@ -1,0 +1,39 @@
+---
+title: "Reliable Webhook Delivery"
+description: "Send your app's events to customer endpoints in order, retry failed deliveries, and turn off endpoints that keep failing."
+---
+
+<Diagram
+  id="webhook-delivery"
+  label="Your backend calls send on the endpoint workflow for each customer endpoint that subscribes to an event. The workflow keeps an ordered outbox, signs each payload, and posts it to the customer's endpoint in a step. The endpoint answers with a status code, and the workflow records the attempt. A failed delivery retries with backoff, and after repeated failures the workflow disables the endpoint. Your customer portal calls listAttempts to show the delivery log and enable to turn the endpoint back on. The numbers show the order of the calls. There is one endpoint workflow per customer endpoint."
+  stackLabel="One per customer endpoint"
+  nodes={[
+    { id: "backend", x: 20, y: 40, w: 150, title: "Your backend", subtitle: "emits events" },
+    { id: "portal", x: 20, y: 170, w: 150, title: "Customer portal", subtitle: "log and settings" },
+    { id: "endpoint", x: 400, y: 100, w: 180, product: "workflows", stack: true, title: "`endpoint`", subtitle: "outbox and attempts" },
+    { id: "customer", x: 740, y: 100, stack: true, title: "Customer endpoint", subtitle: "receives webhooks" },
+  ]}
+  edges={[
+    { from: "backend", to: "endpoint", toOffset: -15, via: [[300, 70], [300, 115]], label: "`send` event", step: 1 },
+    { from: "endpoint", to: "customer", fromOffset: -8, toOffset: -8, label: "signed `POST`", step: 2 },
+    { from: "customer", to: "endpoint", kind: "reply", fromOffset: 8, toOffset: 8, label: "status code", labelAt: [666, 156], step: 3 },
+    { from: "portal", to: "endpoint", toOffset: 15, via: [[300, 200], [300, 145]], label: "`listAttempts`, `enable`", labelAt: [200, 220], labelAnchor: "start", step: 4 },
+  ]}
+  notes={[{ x: 400, y: 198, text: "Retries with backoff, then disables the endpoint." }]}
+/>
+
+## TODO
+
+This page is not written yet. The outline below is what it will cover.
+
+### What we'll build
+
+- An `endpoint` workflow per customer endpoint that holds an ordered outbox of events to deliver.
+- Signed payloads, so customers can check that each webhook came from you.
+- Retries with backoff and a record of every attempt, with its status code and timing.
+- A rule that disables an endpoint after repeated failures and keeps its events until it is turned back on.
+- Actions your customer portal calls to show the delivery log and re-enable an endpoint.
+
+### Similar tools
+
+This is the same job as Svix, Hookdeck Outpost, Convoy, or Inngest. On Rivet each customer endpoint is its own Actor, so one slow or broken endpoint backs up only its own outbox, and the outbox, attempts, and disabled flag live in that Actor's storage instead of a shared table.
