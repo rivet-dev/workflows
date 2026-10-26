@@ -17,27 +17,7 @@ Use `tryStep` when a step failure should produce data instead of failing the who
 
 Use `try` when you want to recover from terminal `step`, `join`, or `race` failures inside a named block.
 
-```ts
-async function runPaymentFlow(ctx: any) {
-  return await ctx.try("payment-flow", async (blockCtx: any) => {
-    const auth = await blockCtx.step("authorize", async (blockCtx) =>
-      authorizeOrder("order-123"),
-    );
-    const capture = await blockCtx.step("capture", async (blockCtx) =>
-      captureOrder("order-123"),
-    );
-    return { auth, capture };
-  });
-}
-
-async function authorizeOrder(orderId: string): Promise<string> {
-  return `auth-${orderId}`;
-}
-
-async function captureOrder(orderId: string): Promise<string> {
-  return `capture-${orderId}`;
-}
-```
+<CodeSnippet file="examples/docs/actors-workflows/try-block.ts" />
 
 - `tryStep` and `try` only catch terminal failures. Retry backoff, sleeps, queue waits, eviction, and history divergence still rethrow.
 - Catching a failure does not undo it. `state` and `vars` mutations made before the failure remain visible after `tryStep` or `try` returns, so use explicit compensating steps when a caught failure needs cleanup.
