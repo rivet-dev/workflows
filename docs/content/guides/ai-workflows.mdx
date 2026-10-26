@@ -1,0 +1,191 @@
+---
+title: "Multi-Step AI Workflows"
+description: "Chain LLM calls and tool calls into one job that picks up at the failed step after a crash or a rate-limit error."
+---
+
+import ExampleLinkBar from "@/components/docs/ExampleLinkBar.astro";
+
+<ExampleLinkBar href="https://github.com/rivet-dev/workflows/tree/main/examples/docs/guides/ai-workflows" />
+
+<Diagram
+  id="ai-workflows"
+  label="Your app posts a job to the /jobs route of your HTTP server, which calls send on a new aiJob workflow and returns the job id right away. The workflow runs one recorded step per call: an extract step that asks the model for the companies and action items in a transcript, one enrich step per company that looks it up in your CRM, a summarize step that asks the model for a brief, and a publish step that posts the brief to your CMS. A failed step retries with backoff, and after a crash the workflow resumes at the step that failed. The workflow broadcasts progress events back to your app. The numbers show the order of the calls. There is one workflow per job."
+  stackLabel="One per job"
+  nodes={[
+    { id: "app", x: 20, y: 120, w: 150, title: "Your app", subtitle: "submits a job" },
+    { id: "server", kind: "group", x: 330, y: 98, w: 170, h: 84, title: "HTTP server" },
+    { id: "jobs", kind: "slot", x: 345, y: 132, w: 140, h: 36, title: "`/jobs`" },
+    { id: "job", x: 600, y: 120, product: "workflows", stack: true, title: "`aiJob`", subtitle: "one step per call" },
+    { id: "llm", x: 920, y: 30, title: "LLM provider", subtitle: "OpenAI or compatible" },
+    { id: "crm", x: 920, y: 120, title: "Your CRM", subtitle: "company lookups" },
+    { id: "cms", x: 920, y: 210, title: "CMS", subtitle: "publishes the brief" },
+  ]}
+  edges={[
+    { from: "app", to: "jobs", label: "`POST /jobs`", step: 1 },
+    { from: "jobs", to: "job", label: "`send`", step: 2 },
+    { from: "job", to: "llm", fromSide: "top", fromOffset: -20, toOffset: -10, via: [[665, 50]], label: "`extract` step", step: 3 },
+    { from: "job", to: "crm", label: "`enrich` steps", step: 4 },
+    { from: "job", to: "llm", fromSide: "top", fromOffset: 20, toOffset: 15, via: [[705, 75]], label: "`summarize` step", step: 5 },
+    { from: "job", to: "cms", fromSide: "bottom", fromOffset: 30, via: [[715, 240]], label: "`publish` step", step: 6 },
+    { from: "job", to: "app", kind: "reply", fromSide: "bottom", toSide: "bottom", fromOffset: -30, via: [[655, 310], [95, 310]], label: "`progress` events", step: 7 },
+  ]}
+  notes={[{ x: 730, y: 285, text: "Failed steps retry with backoff." }]}
+/>
+
+What we'll build:
+
+- An `aiJob` workflow per job that turns a meeting transcript into a short brief for your sales team.
+- Two model steps, extract and summarize, that retry with backoff when the provider is rate limited or down.
+- Enrich steps that look up each company in your CRM between the two model calls.
+- A publish step that posts the brief to your CMS exactly once.
+- A `/jobs` route that starts a job and returns its id right away, and progress events that tell your app which step a job is on.
+
+<Steps>
+
+<Step title="Install">
+
+```sh
+npm add @rivet-dev/workflows rivetkit hono @hono/node-server
+```
+
+</Step>
+
+<Step title="Configure">
+
+Set your model key and the base URLs of your CRM and CMS APIs:
+
+```sh
+OPENAI_API_KEY=sk-...
+CRM_API_URL=https://crm.internal.example.com
+CMS_API_URL=https://cms.internal.example.com
+```
+
+`OPENAI_BASE_URL` and `OPENAI_MODEL` are optional. Point `OPENAI_BASE_URL` at any server that speaks the OpenAI chat completions format.
+
+</Step>
+
+<Step title="Call the model">
+
+Every model call goes through one function:
+
+<CodeSnippet file="examples/docs/guides/ai-workflows/model.ts" title="model.ts" />
+
+- Keeping the call in one file means the workflow never depends on a provider. To use Anthropic, Gemini, or an SDK, change only this function.
+- A `429` or `5xx` throws a plain `Error`. The workflow step that called it retries with backoff.
+- Any other error throws `CriticalError`, which stops retries right away. A bad API key or a malformed request fails the same way every time, so retrying only wastes time.
+
+</Step>
+
+<Step title="Create the workflow">
+
+Each job is its own `aiJob` workflow, keyed by the job id. It waits for a `start` message, then runs the extract step:
+
+<CodeSnippet file="examples/docs/guides/ai-workflows/ai-job.ts" title="ai-job.ts" highlight="retries,extract" />
+
+- `ctx.step` records the step's return value. After a crash or a deploy, the workflow replays and gets the recorded value back instead of calling the model again, so you never pay twice for the same answer.
+- `MODEL_STEP` gives model calls up to 7 attempts. The first retry waits 4 seconds and the wait doubles up to 60 seconds, which is enough for most rate limits to clear. The workflow sleeps durably between attempts, so a long wait does not hold a process.
+- Model calls can be slow, so the step timeout is 2 minutes instead of the default 30 seconds. `retryOnTimeout` makes a timeout retry like any other error.
+- If the model replies with invalid JSON, `JSON.parse` throws and the step asks again.
+
+</Step>
+
+<Step title="Call your APIs">
+
+Between the two model calls, the workflow looks up each company in your CRM:
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/guides/ai-workflows/ai-job.ts" title="ai-job.ts" region="enrich" />
+<CodeSnippet file="examples/docs/guides/ai-workflows/tools.ts" title="tools.ts" />
+</CodeGroup>
+
+- Each lookup is its own step, named by its position. If the third lookup fails, only that one retries, and the first two are not repeated.
+- The loop is safe to replay because the list of companies comes from the recorded extract step, so every replay sees the same list in the same order.
+
+</Step>
+
+<Step title="Summarize with the model">
+
+The summarize step sends the transcript, the action items, and the CRM data back to the model:
+
+<CodeSnippet file="examples/docs/guides/ai-workflows/ai-job.ts" title="ai-job.ts" region="summarize" />
+
+- It uses the same `MODEL_STEP` retry settings as the extract step.
+- `companies` and `extracted` are recorded results from earlier steps, so this step can run in a later process than the ones that produced them.
+
+</Step>
+
+<Step title="Publish the result">
+
+The last step posts the brief to your CMS:
+
+<CodeSnippet file="examples/docs/guides/ai-workflows/ai-job.ts" title="ai-job.ts" region="publish" />
+
+- A step can run more than once. If the process dies after your CMS saved the post but before the step was recorded, the step runs again.
+- `publishPost` sends the job id as an `idempotency-key` header, so your CMS can return the existing post instead of creating a second one. See `tools.ts` in the previous step.
+
+</Step>
+
+<Step title="Report progress">
+
+Every step calls `setStage`, and the `onError` hook reports retries:
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/guides/ai-workflows/ai-job.ts" title="setStage" region="progress" />
+<CodeSnippet file="examples/docs/guides/ai-workflows/ai-job.ts" title="onError" region="on-error" />
+</CodeGroup>
+
+- The stage lives in `state`, so a client that connects late can call `getStatus` and see where the job is.
+- `broadcast` pushes each change to every client connected to the job. No separate pub/sub service is needed.
+- `onError` sees each failed attempt with its retry delay. It only observes, so it is a good place for progress updates and error reporting, but not for work the job depends on.
+
+</Step>
+
+<Step title="Start jobs over HTTP">
+
+The HTTP server has one route. It creates a workflow for the job and hands it the input:
+
+<CodeSnippet file="examples/docs/guides/ai-workflows/server.ts" title="server.ts" highlight="jobs" />
+
+- `send` puts the input on the job's `start` queue and returns as soon as it is stored, so the route answers in milliseconds even though the job takes much longer.
+- A new random id per request means each POST starts its own job. To make retries of the same request safe, derive the id from something stable, such as a document id, and `getOrCreate` returns the existing job.
+
+</Step>
+
+<Step title="Try it">
+
+Start the server:
+
+```sh
+npx tsx server.ts
+```
+
+Then submit a job and follow its progress:
+
+<CodeSnippet file="examples/docs/guides/ai-workflows/client.ts" title="client.ts" />
+
+```sh
+npx tsx client.ts
+```
+
+The client prints each stage as it happens, including any retries, and then the job's final state.
+
+<Note>
+Stop the server while a job is running and start it again. The job continues from the step it was on, and steps that already finished do not call the model or your APIs again.
+</Note>
+
+</Step>
+
+</Steps>
+
+## Next steps
+
+- [Human-in-the-Loop Approvals](/guides/human-in-the-loop): have a person approve the brief before the publish step runs.
+- [Timers & Concurrency](/workflows/docs/timers-and-concurrency#join): look up every company at once with `join` instead of one after another.
+- [Failure & Recovery](/workflows/docs/failure-and-recovery#rollback): undo earlier steps when a later one fails.
+
+## Related docs
+
+- [Steps](/workflows/docs/steps): how steps are recorded and replayed.
+- [Timers & Concurrency](/workflows/docs/timers-and-concurrency#timeouts): step timeouts and retry settings.
+- [Failure & Recovery](/workflows/docs/failure-and-recovery#error-hooks): the `onError` hook.
+- [Patterns](/workflows/docs/patterns): storing progress in state and broadcasting it.

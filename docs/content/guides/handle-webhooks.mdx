@@ -1,0 +1,180 @@
+---
+title: "Handle Incoming Webhooks"
+description: "Accept webhooks from Stripe, GitHub, or Shopify, process each event once, and keep events for the same customer in order."
+---
+
+import ExampleLinkBar from "@/components/docs/ExampleLinkBar.astro";
+
+<ExampleLinkBar href="https://github.com/rivet-dev/workflows/tree/main/examples/docs/guides/handle-webhooks" />
+
+<Diagram
+  id="handle-webhooks"
+  label="Stripe, GitHub, or Shopify posts each event to the /webhooks route of your HTTP server. The route verifies the signature and calls send on the workflow keyed by the customer or object the event is about, then answers 200 right away. The workflow records each event id and skips ids it has already seen, then handles events one at a time in the order they arrived, writing each one to your database in the apply-event step. The numbers show the order of the calls. There is one workflow per customer."
+  stackLabel="One per customer"
+  nodes={[
+    { id: "provider", x: 20, y: 62, w: 150, title: "Provider", subtitle: "Stripe, GitHub, Shopify" },
+    { id: "server", kind: "group", x: 300, y: 40, w: 170, h: 84, title: "HTTP server" },
+    { id: "webhooks", kind: "slot", x: 315, y: 74, w: 140, h: 36, title: "`/webhooks`" },
+    { id: "customer", x: 600, y: 62, product: "workflows", stack: true, title: "`customerEvents`", subtitle: "event ids, in order" },
+    { id: "db", x: 960, y: 62, title: "Your database", subtitle: "orders, access, billing" },
+  ]}
+  edges={[
+    { from: "provider", to: "webhooks", fromOffset: -8, toOffset: -8, label: "signed event", labelAt: [232, 80], step: 1 },
+    { from: "webhooks", to: "customer", label: "`send` event", step: 2 },
+    { from: "webhooks", to: "provider", kind: "reply", fromOffset: 8, toOffset: 8, label: "`200 OK`", labelAt: [232, 118], step: 3 },
+    { from: "customer", to: "db", label: "`apply-event` step", step: 4 },
+  ]}
+/>
+
+Webhook providers send each event at least once. They resend it when your server is slow to answer or answers with an error, and they do not promise to send events in order. This guide puts a workflow in front of your database so each event is applied once, and events about the same customer are applied one after another.
+
+What we'll build:
+
+- A `/webhooks` route that checks the provider's signature and rejects anything that fails.
+- A `customerEvents` workflow per customer, keyed by the customer id in the event.
+- A record of event ids in the workflow, so a redelivered event is skipped instead of applied twice.
+- An answer sent as soon as the event is queued, well inside the provider's timeout.
+- Steps that apply each event to your database in arrival order and retry with backoff when your database is down.
+
+The example uses Stripe. The same shape works for GitHub, Shopify, or any provider that signs its requests.
+
+<Steps>
+
+<Step title="Install">
+
+```sh
+npm add @rivet-dev/workflows rivetkit hono @hono/node-server
+```
+
+</Step>
+
+<Step title="Get a signing secret">
+
+Stripe signs every webhook with a secret that belongs to the endpoint. In the <a href="https://dashboard.stripe.com/webhooks" target="_blank" rel="noopener noreferrer">Stripe Dashboard</a>, add an endpoint for `https://<your-server>/webhooks` and copy its signing secret. To test locally, the <a href="https://docs.stripe.com/stripe-cli" target="_blank" rel="noopener noreferrer">Stripe CLI</a> prints one when you run `stripe listen`. Then set:
+
+```sh
+STRIPE_WEBHOOK_SECRET=whsec_...
+```
+
+</Step>
+
+<Step title="Verify the signature">
+
+Anyone can post to a public URL, so the route checks that each request came from Stripe before it does anything else:
+
+<CodeSnippet file="examples/docs/guides/handle-webhooks/stripe.ts" title="stripe.ts" highlight="verify" />
+
+- Stripe sends a `Stripe-Signature` header with a timestamp and an HMAC-SHA256 of `<timestamp>.<raw body>`. The check recomputes it with your secret and compares the two with `timingSafeEqual`, which takes the same time whether or not they match.
+- Requests signed more than 5 minutes ago are rejected, so someone who captures a request cannot send it again later.
+- The official `stripe` package does the same check with `stripe.webhooks.constructEvent`. Use it if you already depend on it.
+
+<Note>
+Other providers sign differently. GitHub sends `X-Hub-Signature-256`, a hex HMAC-SHA256 of the raw body. Shopify sends `X-Shopify-Hmac-Sha256`, a base64 HMAC-SHA256 of the raw body. Swap in a check for your provider. The rest of this guide stays the same.
+</Note>
+
+</Step>
+
+<Step title="Skip events you have already seen">
+
+Each customer gets a `customerEvents` workflow, keyed by their Stripe customer id. It takes events off its queue one at a time and records each event id before it handles the event:
+
+<CodeSnippet file="examples/docs/guides/handle-webhooks/customer-events.ts" title="customer-events.ts" highlight="dedupe" />
+
+- Queue `send` has no idempotency key, so the workflow dedupes by event id. Stripe gives every event a unique `id` and keeps it the same on every retry.
+- The check and the write happen in one step, and the workflow handles one event at a time. A redelivery that arrives while the first copy is still queued is still caught.
+- The step's result is saved in the workflow's history. If the Rivet Actor restarts, it replays the saved result instead of checking again, so an event is never counted as new twice.
+- Ids are kept for 7 days, longer than Stripe's 3 days of retries, then dropped so `state` stays small.
+
+</Step>
+
+<Step title="Apply events in order">
+
+Once an event is known to be new, the workflow writes it to your database:
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/guides/handle-webhooks/customer-events.ts" title="customer-events.ts" highlight="apply" />
+<CodeSnippet file="examples/docs/guides/handle-webhooks/db.ts" title="db.ts" highlight="db" />
+</CodeGroup>
+
+- Events for one customer are applied one after another, in the order they reached your server. Events for different customers run in parallel, because each customer has its own workflow.
+- If your database is down, `tryStep` retries with backoff, starting at 1 second and doubling up to 1 minute. The waits are durable, so the Rivet Actor can sleep or restart in between.
+- If every retry fails, the event is added to `failed` instead of stopping the workflow. That list is your dead letter queue: later events keep flowing, and you can replay the failed ones once the cause is fixed.
+- `db.ts` keeps rows in memory so the example runs on its own. Replace `applyEvent` with writes to your database.
+
+<Warning>
+Make the write idempotent, such as an upsert keyed by the object id. If the process dies after the write commits but before the step is saved, the step runs again on restart.
+</Warning>
+
+<Note>
+Stripe does not promise to deliver events in the order they happened. When order matters, compare the event's `created` time with the last one you applied, or fetch the latest version of the object from Stripe before writing it.
+</Note>
+
+</Step>
+
+<Step title="Receive webhooks">
+
+The HTTP server has one route. It verifies the request, hands the event to the right customer's workflow, and answers:
+
+<CodeSnippet file="examples/docs/guides/handle-webhooks/server.ts" title="server.ts" highlight="webhooks" />
+
+- The route reads the raw body with `c.req.text()`. The signature covers the exact bytes Stripe sent, so check it before parsing the JSON.
+- Events are keyed by `customer`. Events about a customer object have no `customer` field, so the object's own id, which is the customer id, is used instead.
+- `send` resolves once the event is stored in the workflow's queue. The route answers `200` right away instead of waiting for your database, so it stays well inside the few seconds providers wait before they give up and retry.
+- A request with a bad signature gets a `400` and never reaches the workflow.
+
+</Step>
+
+<Step title="Try it">
+
+Start the server:
+
+```sh
+STRIPE_WEBHOOK_SECRET=whsec_test npx tsx server.ts
+```
+
+In another terminal, post a signed test event, then the same event again, then one with a forged signature:
+
+<CodeSnippet file="examples/docs/guides/handle-webhooks/send-test-event.ts" title="send-test-event.ts" />
+
+```sh
+STRIPE_WEBHOOK_SECRET=whsec_test npx tsx send-test-event.ts
+```
+
+Both copies are accepted, but the event is applied once:
+
+```text
+delivery: 200 {"received":true}
+redelivery: 200 {"received":true}
+forged: 400 invalid signature
+{ applied: 1, duplicates: 1, failed: [] }
+```
+
+The server logs a single `applied evt_test_... (customer.subscription.updated): sub_123 is active` line.
+
+To try real Stripe events, forward them to the server with the Stripe CLI and start the server with the secret it prints:
+
+```sh
+stripe listen --forward-to localhost:3000/webhooks
+stripe trigger customer.subscription.updated
+```
+
+<Note>
+To receive webhooks from a provider before you deploy, run `ngrok http 3000` and use the ngrok URL as `https://<your-server>`.
+</Note>
+
+</Step>
+
+</Steps>
+
+## Next steps
+
+- [Reliable Webhook Delivery](/guides/webhook-delivery): send your own events to customer endpoints with retries.
+- [Human-in-the-Loop Approvals](/guides/human-in-the-loop): ask a person before acting on an event, such as a refund request.
+- [Failure & Recovery](/workflows/docs/failure-and-recovery#error-hooks): get notified when an event lands in `failed`.
+
+## Related docs
+
+- [Queues & Messaging](/workflows/docs/queues#queue-driven-worker): the queue-driven worker this guide builds on.
+- [Steps](/workflows/docs/steps#handling-terminal-failures-as-data): how `tryStep` returns failures as data.
+- [Timers & Concurrency](/workflows/docs/timers-and-concurrency#timeouts): retries, backoff, and why steps should be idempotent.
+- [Reference](/workflows/docs/reference#recommendations): recommendations for replay-safe workflows.

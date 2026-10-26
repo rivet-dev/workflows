@@ -1,0 +1,194 @@
+---
+title: "Reliable Webhook Delivery"
+description: "Send your app's events to customer endpoints in order, retry failed deliveries, and turn off endpoints that keep failing."
+---
+
+import ExampleLinkBar from "@/components/docs/ExampleLinkBar.astro";
+
+<ExampleLinkBar href="https://github.com/rivet-dev/workflows/tree/main/examples/docs/guides/webhook-delivery" />
+
+<Diagram
+  id="webhook-delivery"
+  label="Your backend calls send on the endpoint workflow for each customer endpoint that subscribes to an event. The workflow keeps an ordered outbox, signs each payload, and posts it to the customer's endpoint in a step. The endpoint answers with a status code, and the workflow records the attempt. A failed delivery retries with backoff, and after repeated failures the workflow disables the endpoint. Your customer portal calls listAttempts to show the delivery log and enable to turn the endpoint back on. The numbers show the order of the calls. There is one endpoint workflow per customer endpoint."
+  stackLabel="One per customer endpoint"
+  nodes={[
+    { id: "backend", x: 20, y: 40, w: 150, title: "Your backend", subtitle: "emits events" },
+    { id: "portal", x: 20, y: 170, w: 150, title: "Customer portal", subtitle: "log and settings" },
+    { id: "endpoint", x: 400, y: 100, w: 180, product: "workflows", stack: true, title: "`endpoint`", subtitle: "outbox and attempts" },
+    { id: "customer", x: 740, y: 100, stack: true, title: "Customer endpoint", subtitle: "receives webhooks" },
+  ]}
+  edges={[
+    { from: "backend", to: "endpoint", toOffset: -15, via: [[300, 70], [300, 115]], label: "`send` event", step: 1 },
+    { from: "endpoint", to: "customer", fromOffset: -8, toOffset: -8, label: "signed `POST`", step: 2 },
+    { from: "customer", to: "endpoint", kind: "reply", fromOffset: 8, toOffset: 8, label: "status code", labelAt: [666, 156], step: 3 },
+    { from: "portal", to: "endpoint", toOffset: 15, via: [[300, 200], [300, 145]], label: "`listAttempts`, `enable`", labelAt: [200, 220], labelAnchor: "start", step: 4 },
+  ]}
+  notes={[{ x: 400, y: 198, text: "Retries with backoff, then disables the endpoint." }]}
+/>
+
+When your customers subscribe to webhooks, their endpoints will be slow, down for a deploy, or broken for days. This guide gives each customer endpoint its own workflow that delivers events in order, retries with backoff, keeps a log of every attempt, and stops sending to an endpoint that keeps failing until the customer turns it back on.
+
+What we'll build:
+
+- An `endpoint` workflow per customer endpoint that holds an ordered outbox of events to deliver.
+- Signed payloads, so customers can check that each webhook came from you.
+- Retries with backoff and a record of every attempt, with its status code and timing.
+- A rule that disables an endpoint after repeated failures and keeps its events until it is turned back on.
+- Actions your customer portal calls to show the delivery log and re-enable an endpoint.
+
+<Steps>
+
+<Step title="Install">
+
+```sh
+npm add @rivet-dev/workflows rivetkit hono @hono/node-server
+```
+
+</Step>
+
+<Step title="Sign payloads">
+
+Every request carries a signature, so a customer can tell your webhooks apart from anyone else posting to their URL:
+
+<CodeSnippet file="examples/docs/guides/webhook-delivery/sign.ts" title="sign.ts" highlight="sign" />
+
+- The headers follow the <a href="https://www.standardwebhooks.com" target="_blank" rel="noopener noreferrer">Standard Webhooks</a> spec. `webhook-signature` is an HMAC-SHA256 of `<id>.<timestamp>.<body>`, keyed by the endpoint's secret, so customers can check it with any Standard Webhooks library.
+- `webhook-id` is the event id. It stays the same on every retry, so customers can use it to skip events they have already handled.
+- Each endpoint gets its own secret from `createSecret`. A leaked secret affects only that endpoint.
+
+</Step>
+
+<Step title="Create the endpoint workflow">
+
+Each customer endpoint is its own `endpoint` workflow, keyed by an endpoint id. Its queue is the outbox:
+
+<CodeSnippet file="examples/docs/guides/webhook-delivery/endpoint.ts" title="endpoint.ts" highlight="outbox" />
+
+- Events come off the queue one at a time, in the order your backend sent them. The next event stays in the queue until the current one is delivered, so a customer never sees event 2 before event 1.
+- The inner `deliver-event` loop keeps working on the same event until it is delivered, including across a disable and re-enable.
+- One slow or broken endpoint backs up only its own outbox. Every other endpoint has its own workflow and keeps receiving events.
+- The URL and secret are set in `onCreate` from the input your backend passes when it creates the endpoint.
+
+</Step>
+
+<Step title="Deliver with retries">
+
+The delivery itself is one step that posts the signed event and records the attempt:
+
+<CodeSnippet file="examples/docs/guides/webhook-delivery/endpoint.ts" title="endpoint.ts" highlight="deliver" />
+
+- Any `2xx` answer counts as delivered. Any other status, a network error, or no answer within 10 seconds throws, and `tryStep` retries after 2, 4, 8, 16, and 32 seconds.
+- The waits between retries are durable. The Rivet Actor can sleep or restart during a long backoff and picks up at the next attempt.
+- The attempt is pushed to `attempts` before the step throws. A failed step keeps the changes it made to `state`, so the log shows every try, not just the last one.
+- The log keeps the newest 100 attempts. Store attempts in your own database if you need a longer history.
+
+<Note>
+These retries span about a minute so the example is quick to try. Real endpoints can be down for hours, so raise `MAX_RETRIES` and `RETRY_BACKOFF_MAX_MS` for production. For example, 20 retries capped at 1 hour keep trying for about 10 hours.
+</Note>
+
+<Warning>
+Delivery is at least once. If a customer's server handles a request but its answer is lost or arrives after the timeout, the event is sent again. Tell customers to skip any `webhook-id` they have already handled.
+</Warning>
+
+</Step>
+
+<Step title="Disable failing endpoints">
+
+When the retries run out, the workflow disables the endpoint instead of dropping the event:
+
+<CodeSnippet file="examples/docs/guides/webhook-delivery/endpoint.ts" title="endpoint.ts" highlight="disable" />
+
+- On success, the event is cleared from `pending` and the loop breaks, so the workflow takes the next event off the queue.
+- On failure, the endpoint is marked `disabled` and the workflow waits on the `enable` queue. The failed event and every event behind it are kept until then, so nothing is lost.
+- While it waits, the Rivet Actor can sleep. No process is held for a disabled endpoint, however long it stays off.
+- After `enable`, the loop runs again and retries the same event with a fresh set of retries.
+
+</Step>
+
+<Step title="Emit events and serve the portal">
+
+Your backend creates endpoints, emits events, and gives your customer portal two routes:
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/guides/webhook-delivery/server.ts" title="server.ts" highlight="emit,register,portal" />
+<CodeSnippet file="examples/docs/guides/webhook-delivery/endpoint.ts" title="endpoint.ts" highlight="actions" />
+</CodeGroup>
+
+- `emit` sends the event to the `endpoint` workflow of every endpoint subscribed to its type. `send` returns once the event is stored in the outbox, so your app never waits on a customer's server.
+- `POST /endpoints` creates the workflow with the URL and a new secret, and returns the secret once so the customer can check signatures.
+- `listAttempts` returns the delivery log, newest first, along with whether the endpoint is disabled. It never returns the secret.
+- `enable` queues a message for the waiting workflow, and only when the endpoint is disabled.
+- The `subscriptions` map is in memory to keep the example short. Store subscriptions in your database.
+
+<Warning>
+These routes trust the endpoint id in the URL. In production, check that the signed-in customer owns the endpoint before you call `listAttempts` or `enable`.
+</Warning>
+
+</Step>
+
+<Step title="Check signatures on the customer side">
+
+Your customers run the other half. This is what their check looks like, and the test receiver in the next step uses it:
+
+<CodeSnippet file="examples/docs/guides/webhook-delivery/sign.ts" title="sign.ts" highlight="verify" />
+
+- It rebuilds the signature from the raw body and the `webhook-id` and `webhook-timestamp` headers, then compares with `timingSafeEqual`.
+- Requests signed more than 5 minutes ago are rejected, so a captured request cannot be replayed later.
+- The header can hold several signatures separated by spaces, which lets you rotate an endpoint's secret without breaking deliveries.
+
+</Step>
+
+<Step title="Try it">
+
+Start the server:
+
+```sh
+npx tsx server.ts
+```
+
+In another terminal, run the client. It adds an endpoint, starts a receiver that answers `503` to the first 3 requests, and emits two events:
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/guides/webhook-delivery/client.ts" title="client.ts" />
+<CodeSnippet file="examples/docs/guides/webhook-delivery/receiver.ts" title="receiver.ts" />
+</CodeGroup>
+
+```sh
+npx tsx client.ts
+```
+
+The first event fails 3 times, 2, 4, and 8 seconds apart, then gets through. The second event waits behind it and is delivered right after:
+
+```text
+endpoint ep_83460a4b-7b27-416c-acf1-856402c9b7c2
+receiver: msg_e202e0a2-9126-4a90-8cb8-189d9f9b6d0e order.created -> 503
+08:59:47 msg_e202e0a2 attempt 1: 503 (17ms)
+receiver: msg_e202e0a2-9126-4a90-8cb8-189d9f9b6d0e order.created -> 503
+08:59:49 msg_e202e0a2 attempt 2: 503 (3ms)
+receiver: msg_e202e0a2-9126-4a90-8cb8-189d9f9b6d0e order.created -> 503
+08:59:53 msg_e202e0a2 attempt 3: 503 (3ms)
+receiver: msg_e202e0a2-9126-4a90-8cb8-189d9f9b6d0e order.created -> 200
+receiver: msg_1e4e1568-28a1-498c-9d9f-bb95c83215e9 order.created -> 200
+09:00:01 msg_e202e0a2 attempt 4: 200 (3ms)
+09:00:01 msg_1e4e1568 attempt 1: 200 (2ms)
+both events delivered
+```
+
+Run it with `FAIL_FIRST=100 npx tsx client.ts` to watch the endpoint run out of retries after 6 attempts and get disabled. The client then fixes the receiver and calls `enable`, and both events are delivered in order.
+
+</Step>
+
+</Steps>
+
+## Next steps
+
+- [Handle Incoming Webhooks](/guides/handle-webhooks): the receiving side, with signature checks and deduplication.
+- [Failure & Recovery](/workflows/docs/failure-and-recovery#error-hooks): alert your team or email the customer when an endpoint is disabled.
+- [Patterns](/workflows/docs/patterns#store-workflow-progress-in-state-broadcast): broadcast each attempt so the portal updates live.
+
+## Related docs
+
+- [Steps](/workflows/docs/steps#handling-terminal-failures-as-data): how `tryStep` returns failures as data.
+- [Timers & Concurrency](/workflows/docs/timers-and-concurrency#timeouts): step timeouts, retries, and backoff.
+- [Queues & Messaging](/workflows/docs/queues#signal-driven-control-loop): waiting on a queue for a control message, like `enable`.
+- [Reference](/workflows/docs/reference#recommendations): recommendations for replay-safe workflows.

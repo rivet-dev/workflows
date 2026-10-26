@@ -17,9 +17,15 @@ importers:
 
   examples/docs:
     dependencies:
+      '@hono/node-server':
+        specifier: ^2.1.5
+        version: 2.1.5(hono@4.13.4)
       '@rivet-dev/workflows':
         specifier: workspace:*
         version: link:../../packages/workflows
+      hono:
+        specifier: ^4.13.4
+        version: 4.13.4
       rivetkit:
         specifier: 2.3.11
         version: 2.3.11(better-sqlite3@12.11.1)
@@ -492,6 +498,12 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@hono/node-server@2.1.5':
+    resolution: {integrity: sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      hono: ^4 || ^5.0.0-0
 
   '@hono/zod-openapi@1.6.0':
     resolution: {integrity: sha512-42HXUBIaGmQh+hZGLw3Hy5piOreIXgnBnUSs55mtn2gnW/xWtU9nQwEUtRRCk5to8Vm2XbfO0J83eUCwCf5eTg==}
@@ -1405,10 +1417,6 @@ packages:
 
   hmac-drbg@1.0.1:
     resolution: {integrity: sha512-Tti3gMqLdZfhOQY1Mzf/AanLiqh1WTiJgEj26ZuYQ9fbkLomzGchCws4FyrSd4VkpBfiNhaE1On+lOz894jvXg==}
-
-  hono@4.13.3:
-    resolution: {integrity: sha512-r8AO2mYHoLxSHkgafNeC/BXyb2vWRxD3jem4Ts+ptav8oTG5FIRifAjuJEmZI4bSvvc2ns0GxmIYiZnHqN3mMw==}
-    engines: {node: '>=16.9.0'}
 
   hono@4.13.4:
     resolution: {integrity: sha512-AGEwKIyRMHRv1t8Wjwa3LHxQ61X5CqrdFT+4BRNTpqS5aJNnpl5WLjADb7vFlJzI/8uK7T5QLVApCMQKNa3LgQ==}
@@ -2361,11 +2369,15 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
-  '@hono/zod-openapi@1.6.0(hono@4.13.3)(zod@4.4.3)':
+  '@hono/node-server@2.1.5(hono@4.13.4)':
+    dependencies:
+      hono: 4.13.4
+
+  '@hono/zod-openapi@1.6.0(hono@4.13.4)(zod@4.4.3)':
     dependencies:
       '@asteasolutions/zod-to-openapi': 9.1.0(zod@4.4.3)
-      '@hono/zod-validator': 0.9.0(hono@4.13.3)(zod@4.4.3)
-      hono: 4.13.3
+      '@hono/zod-validator': 0.9.0(hono@4.13.4)(zod@4.4.3)
+      hono: 4.13.4
       openapi3-ts: 4.6.1
       zod: 4.4.3
 
@@ -2375,11 +2387,6 @@ snapshots:
       '@hono/zod-validator': 0.9.0(hono@4.13.4)(zod@4.4.3)
       hono: 4.13.4
       openapi3-ts: 4.6.1
-      zod: 4.4.3
-
-  '@hono/zod-validator@0.9.0(hono@4.13.3)(zod@4.4.3)':
-    dependencies:
-      hono: 4.13.3
       zod: 4.4.3
 
   '@hono/zod-validator@0.9.0(hono@4.13.4)(zod@4.4.3)':
@@ -3225,8 +3232,6 @@ snapshots:
       minimalistic-assert: 1.0.1
       minimalistic-crypto-utils: 1.0.1
 
-  hono@4.13.3: {}
-
   hono@4.13.4: {}
 
   https-browserify@1.0.0: {}
@@ -3674,7 +3679,7 @@ snapshots:
 
   rivetkit@2.3.7(better-sqlite3@12.11.1):
     dependencies:
-      '@hono/zod-openapi': 1.6.0(hono@4.13.3)(zod@4.4.3)
+      '@hono/zod-openapi': 1.6.0(hono@4.13.4)(zod@4.4.3)
       '@rivet-dev/agent-os-core': 0.1.1
       '@rivetkit/bare-ts': 0.6.2
       '@rivetkit/engine-cli': 2.3.7
@@ -3687,7 +3692,7 @@ snapshots:
       '@rivetkit/workflow-engine': 2.3.7
       cbor-x: 1.6.5
       drizzle-orm: 0.44.7(better-sqlite3@12.11.1)
-      hono: 4.13.3
+      hono: 4.13.4
       invariant: 2.2.4
       p-retry: 6.2.1
       pino: 9.14.0

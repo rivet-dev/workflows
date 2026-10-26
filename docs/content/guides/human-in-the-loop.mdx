@@ -1,0 +1,194 @@
+---
+title: "Human-in-the-Loop Approvals"
+description: "Pause a workflow or an agent's tool call until a person approves or rejects it, even if the answer takes days."
+---
+
+import ExampleLinkBar from "@/components/docs/ExampleLinkBar.astro";
+
+<ExampleLinkBar href="https://github.com/rivet-dev/workflows/tree/main/examples/docs/guides/human-in-the-loop" />
+
+<Diagram
+  id="human-in-the-loop"
+  label="Your app, or an agent tool, calls send on a new approval workflow with the request. The workflow records the request and posts a Slack message with Approve and Reject buttons to the approver. It then waits on its decision queue with a three-day timeout, without holding a server. When the approver clicks a button, Slack posts to the /approvals route of your HTTP server, which calls getStatus to check the request and then send with the decision. On approve the workflow runs the tool against your API in the run-tool step. Finally it broadcasts a finished event to the requester. The numbers show the order of the calls. There is one workflow per approval request."
+  stackLabel="One per approval request"
+  nodes={[
+    { id: "app", x: 20, y: 40, w: 150, title: "App or agent", subtitle: "asks to run a tool" },
+    { id: "approver", x: 20, y: 170, w: 150, title: "Approver", subtitle: "in Slack" },
+    { id: "server", kind: "group", x: 265, y: 148, w: 170, h: 84, title: "HTTP server" },
+    { id: "approvals", kind: "slot", x: 280, y: 182, w: 140, h: 36, title: "`/approvals`" },
+    { id: "approval", x: 650, y: 170, product: "workflows", stack: true, title: "`approval`", subtitle: "decision or timeout" },
+    { id: "api", x: 970, y: 170, title: "Your API", subtitle: "runs the tool" },
+  ]}
+  edges={[
+    { from: "app", to: "approval", fromOffset: -12, toSide: "top", via: [[735, 58]], label: "`send` request", step: 1 },
+    { from: "approval", to: "approver", fromSide: "bottom", toSide: "bottom", via: [[735, 290], [95, 290]], label: "Slack message with Approve and Reject", step: 2 },
+    { from: "approver", to: "approvals", label: "click", step: 3 },
+    { from: "approvals", to: "approval", label: "`getStatus`, `send` decision", step: 4 },
+    { from: "approval", to: "api", label: "`run-tool` step", step: 5 },
+    { from: "approval", to: "app", kind: "reply", fromSide: "top", fromOffset: -40, toOffset: 18, via: [[695, 88]], label: "`finished` event", step: 6 },
+  ]}
+  notes={[{ x: 790, y: 272, text: "Expires after 3 days with no answer.", anchor: "start" }]}
+/>
+
+What we'll build:
+
+- An `approval` workflow per request that records which tool should run, with which arguments, and who must answer.
+- A Slack message that shows the request to the approver with Approve and Reject buttons.
+- A durable wait on the decision queue that can last for days without a running server.
+- A timeout that expires the request and tells the requester when no one answers.
+- The same gate wrapped around an agent's tool, so the tool runs only after a person approves it.
+
+<Steps>
+
+<Step title="Install">
+
+```sh
+npm add @rivet-dev/workflows rivetkit hono @hono/node-server
+```
+
+</Step>
+
+<Step title="Set up Slack">
+
+<a href="https://api.slack.com/apps" target="_blank" rel="noopener noreferrer">Create a Slack app</a> and give its bot the `chat:write` scope. Install it to your workspace. Then set:
+
+```sh
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_SIGNING_SECRET=...
+APPROVER_SLACK_ID=U...
+AGENT_SLACK_CHANNEL=C...
+ORDERS_API_URL=https://api.example.com
+```
+
+`APPROVER_SLACK_ID` is the Slack user who answers requests. `AGENT_SLACK_CHANNEL` is where the requester hears the outcome. You turn on button clicks in the last step, once the server is running.
+
+</Step>
+
+<Step title="Define the tools">
+
+The tools that need approval live in one place. The workflow runs them, never the caller:
+
+<CodeSnippet file="examples/docs/guides/human-in-the-loop/tools.ts" title="tools.ts" />
+
+- A request names a tool and its arguments as data, such as `{ tool: "refund_order", args: { ... } }`. Code cannot be put on a queue, so the workflow looks the tool up by name when it runs it.
+- Each call sends the request id as an idempotency key. If the call is retried, your API can return the first result instead of refunding twice.
+
+</Step>
+
+<Step title="Create the approval workflow">
+
+Each request is its own `approval` workflow, keyed by a request id. It waits for the request, records it, and asks the approver:
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/guides/human-in-the-loop/approval.ts" title="approval.ts" highlight="request" />
+<CodeSnippet file="examples/docs/guides/human-in-the-loop/slack.ts" title="slack.ts" highlight="buttons" />
+</CodeGroup>
+
+- The request is stored in `state`, so `getStatus` can show what is being asked at any time, even while the workflow waits.
+- Each button's `value` is the request id. That is all `/approvals` needs to find the right workflow.
+- Without `SLACK_BOT_TOKEN`, `postMessage` logs the message instead of posting it, so you can try the flow before Slack is set up.
+- To approve by email instead, send two links to a route of your own. The route then sends the decision the same way `/approvals` does below.
+
+</Step>
+
+<Step title="Wait for a decision">
+
+The workflow then waits for a `decision` message or for the timeout, whichever comes first:
+
+<CodeSnippet file="examples/docs/guides/human-in-the-loop/approval.ts" title="approval.ts" region="wait" />
+
+- `nextBatch` with a `timeout` returns an empty list when the time runs out. With a message, it returns that message.
+- The deadline is recorded in the workflow's history. While it waits, the Rivet Actor can sleep and no process is held. A decision message or the deadline wakes it up, even after a restart or a deploy.
+- `names: ["decision"]` reads only decisions, so nothing else on the queue can be mistaken for an answer.
+
+</Step>
+
+<Step title="Act on the decision">
+
+On approve, the workflow runs the tool. Every path records the outcome and tells the requester:
+
+<CodeSnippet file="examples/docs/guides/human-in-the-loop/approval.ts" title="approval.ts" region="outcome" />
+
+- No decision means the request expired. Expired and rejected requests skip the tool entirely.
+- `tryStep` retries the tool with backoff. If it keeps failing, it returns the error as data instead of failing the workflow, so the outcome is `failed` and the requester still hears about it.
+- `broadcast` sends the outcome to connected clients, which is how a waiting agent tool gets its answer. The `notify-requester` step also posts it in Slack.
+
+</Step>
+
+<Step title="Handle button clicks">
+
+Slack posts every button click to `/approvals`. The route checks the request, then hands the decision to the workflow:
+
+<CodeSnippet file="examples/docs/guides/human-in-the-loop/server.ts" title="server.ts" highlight="approvals" />
+
+- `verifySlackRequest` in `slack.ts` checks Slack's signature and rejects requests more than 5 minutes old.
+- `getStatus` reads the waiting workflow directly. A late click on an expired or already decided request gets a short reply instead of a second decision.
+- Only the assigned approver can answer. Anyone else who clicks gets an ephemeral reply that only they can see.
+- The route replaces the original message through Slack's `response_url`, so the buttons disappear once someone has answered.
+
+</Step>
+
+<Step title="Gate an agent's tool">
+
+An agent tool can ask for approval the same way. Its `execute` waits until a person answers:
+
+<CodeSnippet file="examples/docs/guides/human-in-the-loop/agent-tool.ts" title="agent-tool.ts" />
+
+- `requestApproval` starts a workflow with a new id, sends the request, and waits for the `finished` event.
+- The tool shape, with a name, a description, JSON Schema parameters, and `execute`, works with most agent frameworks. Adapt it to yours.
+- The refund itself happens in the workflow's `run-tool` step, not in the agent. Even a confused agent cannot refund without a person saying yes.
+
+<Note>
+The tool waits only as long as its process runs. The request, the decision, and the refund live in the workflow, so they continue even if the agent restarts. Keep the request id and call `getStatus` to pick up the outcome later.
+</Note>
+
+</Step>
+
+<Step title="Try it">
+
+Start the server:
+
+```sh
+npx tsx server.ts
+```
+
+In your Slack app settings, open **Interactivity & Shortcuts**, turn it on, and set the **Request URL** to `https://<your-server>/approvals`.
+
+<Note>
+If you haven't deployed yet, run `ngrok http 3000` and use the ngrok URL as `https://<your-server>`.
+</Note>
+
+Then call the tool the way an agent would:
+
+<CodeSnippet file="examples/docs/guides/human-in-the-loop/client.ts" title="client.ts" />
+
+```sh
+npx tsx client.ts
+```
+
+The approver gets a Slack message. When they click **Approve**, the refund runs and `client.ts` prints the result.
+
+To test without Slack, leave `SLACK_BOT_TOKEN` unset. The server logs the request id. Answer it from another terminal:
+
+<CodeSnippet file="examples/docs/guides/human-in-the-loop/decide.ts" title="decide.ts" />
+
+```sh
+npx tsx decide.ts <request-id> approve
+```
+
+</Step>
+
+</Steps>
+
+## Next steps
+
+- [Multi-Step AI Workflows](/guides/ai-workflows): add an approval before an AI job publishes its result.
+- [Human in the Loop for agents](/agents/docs/human-in-the-loop): ask the user before an agent acts.
+- [Timers & Concurrency](/workflows/docs/timers-and-concurrency#race): use `race` when the wait has more than two ways to end.
+
+## Related docs
+
+- [Queues & Messaging](/workflows/docs/queues#human-approval-gate): the basic approval gate.
+- [Steps](/workflows/docs/steps#handling-terminal-failures-as-data): how `tryStep` returns failures as data.
+- [Timers & Concurrency](/workflows/docs/timers-and-concurrency): durable sleeps and timeouts.
+- [Patterns](/workflows/docs/patterns): storing progress in state and broadcasting it.
