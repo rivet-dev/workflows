@@ -59,7 +59,7 @@ try {
 			"packed manifest contains an unresolved workspace/catalog specifier",
 		);
 	}
-	if (manifest.peerDependencies?.rivetkit !== ">=2.3.11 <2.4.0") {
+	if (manifest.peerDependencies?.rivetkit !== ">=2.3.11 <2.4.0 || ^3.0.0") {
 		throw new Error("packed manifest has the wrong RivetKit peer range");
 	}
 	if (manifest.dependencies?.rivetkit) {
