@@ -6,6 +6,14 @@ skill: true
 
 import { Hosting } from "@/components/docs/Hosting";
 
+## Install
+
+```sh
+npm install @rivet-dev/workflows
+```
+
+The package re-exports RivetKit, so `setup`, `actor`, and `queue` come from the same `@rivet-dev/workflows` import. Clients keep using `rivetkit/client`.
+
 ## Simple workflow
 
 Use this when you need a short multi-step sequence.
