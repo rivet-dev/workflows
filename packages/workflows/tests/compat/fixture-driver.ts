@@ -174,6 +174,12 @@ export class CompatibilityDriver {
 		this.#rows.delete(keyString(key));
 	}
 
+	async batchDelete(keys: Uint8Array[]): Promise<void> {
+		for (const key of keys) {
+			this.#rows.delete(keyString(key));
+		}
+	}
+
 	async deletePrefix(prefix: Uint8Array): Promise<void> {
 		for (const [encoded, row] of this.#rows) {
 			if (startsWith(row.key, prefix)) this.#rows.delete(encoded);

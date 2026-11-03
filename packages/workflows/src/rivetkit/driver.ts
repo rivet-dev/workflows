@@ -139,6 +139,18 @@ class WorkflowStorage {
 		);
 	}
 
+	async batchDelete(keys: Uint8Array[]): Promise<void> {
+		if (keys.length === 0) return;
+		await this.#db.transaction(async (tx) => {
+			for (const key of keys) {
+				await tx.execute(
+					"DELETE FROM _rivet_wf_kv WHERE key = ?",
+					prefixWorkflowKey(key),
+				);
+			}
+		});
+	}
+
 	async deletePrefix(prefix: Uint8Array): Promise<void> {
 		const start = prefixWorkflowKey(prefix);
 		await this.#db.execute(
@@ -287,6 +299,10 @@ export class ActorWorkflowDriver implements EngineDriver {
 		await track(this.#runCtx, this.#storage.delete(key));
 	}
 
+	async batchDelete(keys: Uint8Array[]): Promise<void> {
+		await track(this.#runCtx, this.#storage.batchDelete(keys));
+	}
+
 	async deletePrefix(prefix: Uint8Array): Promise<void> {
 		await track(this.#runCtx, this.#storage.deletePrefix(prefix));
 	}
@@ -368,6 +384,10 @@ export class ActorWorkflowControlDriver implements EngineDriver {
 
 	async delete(key: Uint8Array): Promise<void> {
 		await this.#storage.delete(key);
+	}
+
+	async batchDelete(keys: Uint8Array[]): Promise<void> {
+		await this.#storage.batchDelete(keys);
 	}
 
 	async deletePrefix(prefix: Uint8Array): Promise<void> {
