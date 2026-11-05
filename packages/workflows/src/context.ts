@@ -919,6 +919,7 @@ export class WorkflowContextImpl implements WorkflowContextInterface {
 			metadata.status = "completed";
 			metadata.error = undefined;
 			metadata.completedAt = Date.now();
+			metadata.dirty = true;
 
 			// Ephemeral steps don't trigger an immediate flush. This avoids the
 			// synchronous write overhead for transient operations. Note that the
@@ -945,6 +946,9 @@ export class WorkflowContextImpl implements WorkflowContextInterface {
 				entry.kind.data.error = String(error);
 			}
 			entry.dirty = true;
+			// A sibling branch can save this step's running metadata while the
+			// callback runs, so the failure status must be saved again.
+			metadata.dirty = true;
 
 			// Timeout errors are treated as critical by default. Steps opt
 			// into retrying on timeout with retryOnTimeout: true.
