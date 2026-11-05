@@ -229,12 +229,64 @@ export interface PendingDeletions {
 	ranges: { start: Uint8Array; end: Uint8Array }[];
 }
 
+interface FlushQueue {
+	/** Settles when every save started or queued so far has finished. */
+	tail: Promise<void>;
+	/** The next save, while it has not started. Other callers can join it. */
+	waiting?: Promise<void>;
+}
+
+// Saves of one workflow run one at a time, so an older snapshot never lands
+// after a newer one.
+const flushQueues = new WeakMap<Storage, FlushQueue>();
+
+/**
+ * Save workflow history in order, preserving mutations made during each write.
+ *
+ * A save that has not started reads storage when it starts, so it also saves
+ * the changes of callers that join it. They share its result. Saves with
+ * deletions do not share, so pruning runs in order with the writes around it.
+ */
+export function flush(
+	storage: Storage,
+	driver: EngineDriver,
+	onHistoryUpdated?: () => void,
+	pendingDeletions?: PendingDeletions,
+): Promise<void> {
+	let queue = flushQueues.get(storage);
+	if (!queue) {
+		queue = { tail: Promise.resolve() };
+		flushQueues.set(storage, queue);
+	}
+	if (queue.waiting && !pendingDeletions) {
+		return queue.waiting;
+	}
+
+	const activeQueue = queue;
+	const next: Promise<void> = activeQueue.tail.then(() => {
+		if (activeQueue.waiting === next) {
+			activeQueue.waiting = undefined;
+		}
+		return flushSnapshot(
+			storage,
+			driver,
+			onHistoryUpdated,
+			pendingDeletions,
+		);
+	});
+	if (!pendingDeletions) {
+		activeQueue.waiting = next;
+	}
+	activeQueue.tail = next.catch(() => undefined);
+	return next;
+}
+
 /**
  * Flush all dirty data to the driver. Optionally includes pending
  * deletions so that history pruning happens alongside the
  * state write.
  */
-export async function flush(
+async function flushSnapshot(
 	storage: Storage,
 	driver: EngineDriver,
 	onHistoryUpdated?: () => void,
@@ -317,46 +369,61 @@ export async function flush(
 		});
 	}
 
-	if (writes.length > 0) {
-		if (driver.atomicBatch) {
-			await driver.batch(writes);
-		} else {
-			for (const chunk of splitBatchWrites(writes)) {
-				await driver.batch(chunk);
-			}
-		}
-	}
-
-	// Apply pending deletions after the batch write. These are collected
-	// by collectLoopPruning so pruning happens alongside the state write.
-	if (pendingDeletions) {
-		const deleteOps: Promise<void>[] = [];
-		for (const prefix of pendingDeletions.prefixes) {
-			deleteOps.push(driver.deletePrefix(prefix));
-		}
-		for (const range of pendingDeletions.ranges) {
-			deleteOps.push(driver.deleteRange(range.start, range.end));
-		}
-		for (const key of pendingDeletions.keys) {
-			deleteOps.push(driver.delete(key));
-		}
-		if (deleteOps.length > 0) {
-			await Promise.all(deleteOps);
-			historyUpdated = true;
-		}
-	}
-
-	// Update flushed tracking after successful write
+	// Record what this write contains before awaiting it. A concurrent branch
+	// can change storage during the write, and those changes must stay dirty.
+	const savedNameCount = storage.nameRegistry.length;
+	const savedState = storage.state;
+	const savedOutput = storage.output;
+	const savedError = storage.error;
 	for (const entry of dirtyEntries) {
 		entry.dirty = false;
 	}
 	for (const metadata of dirtyMetadata) {
 		metadata.dirty = false;
 	}
-	storage.flushedNameCount = storage.nameRegistry.length;
-	storage.flushedState = storage.state;
-	storage.flushedOutput = storage.output;
-	storage.flushedError = storage.error;
+	try {
+		if (writes.length > 0) {
+			if (driver.atomicBatch) {
+				await driver.batch(writes);
+			} else {
+				for (const chunk of splitBatchWrites(writes)) {
+					await driver.batch(chunk);
+				}
+			}
+		}
+
+		// Apply pending deletions after the batch write. These are collected
+		// by collectLoopPruning so pruning happens alongside the state write.
+		if (pendingDeletions) {
+			const deleteOps: Promise<void>[] = [];
+			for (const prefix of pendingDeletions.prefixes) {
+				deleteOps.push(driver.deletePrefix(prefix));
+			}
+			for (const range of pendingDeletions.ranges) {
+				deleteOps.push(driver.deleteRange(range.start, range.end));
+			}
+			for (const key of pendingDeletions.keys) {
+				deleteOps.push(driver.delete(key));
+			}
+			if (deleteOps.length > 0) {
+				await Promise.all(deleteOps);
+				historyUpdated = true;
+			}
+		}
+	} catch (error) {
+		for (const entry of dirtyEntries) {
+			entry.dirty = true;
+		}
+		for (const metadata of dirtyMetadata) {
+			metadata.dirty = true;
+		}
+		throw error;
+	}
+
+	storage.flushedNameCount = savedNameCount;
+	storage.flushedState = savedState;
+	storage.flushedOutput = savedOutput;
+	storage.flushedError = savedError;
 
 	if (historyUpdated && onHistoryUpdated) {
 		onHistoryUpdated();
