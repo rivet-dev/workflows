@@ -607,16 +607,39 @@ export class WorkflowContextImpl implements WorkflowContextInterface {
 	}
 
 	/**
-	 * Validate that every direct entry in this scope was visited. Nested scopes
-	 * validate their own entries when they execute.
+	 * Validate that every entry this scope owns was visited. That covers direct
+	 * entries and the entries of try() blocks inside this scope.
 	 */
 	validateComplete(): void {
+		// Persisted containers validate their own children when they run, or
+		// replay a cached result without revisiting them. try() has no entry,
+		// so its descendants still belong to the surrounding scope.
 		for (const [key, entry] of this.storage.history.entries) {
-			const isDirectChild =
-				entry.location.length === this.currentLocation.length + 1 &&
-				isLocationPrefix(this.currentLocation, entry.location);
+			if (
+				entry.location.length <= this.currentLocation.length ||
+				!isLocationPrefix(this.currentLocation, entry.location) ||
+				this.visitedKeys.has(key)
+			) {
+				continue;
+			}
 
-			if (isDirectChild && !this.visitedKeys.has(key)) {
+			let hasParentEntry = false;
+			for (
+				let depth = this.currentLocation.length + 1;
+				depth < entry.location.length;
+				depth++
+			) {
+				const parentKey = locationToKey(
+					this.storage,
+					entry.location.slice(0, depth),
+				);
+				if (this.storage.history.entries.has(parentKey)) {
+					hasParentEntry = true;
+					break;
+				}
+			}
+
+			if (!hasParentEntry) {
 				throw new HistoryDivergedError(
 					`Entry "${key}" exists in history but was not visited. ` +
 						"Workflow code may have changed. Use ctx.removed() to handle migrations.",
