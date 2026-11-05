@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+	HistoryDivergedError,
 	InMemoryDriver,
 	RaceError,
 	runWorkflow,
@@ -355,3 +356,59 @@ for (const mode of modes) {
 		});
 	});
 }
+
+describe("Workflow Engine Race (changed code)", { sequential: true }, () => {
+	let driver: InMemoryDriver;
+
+	beforeEach(() => {
+		driver = new InMemoryDriver();
+		driver.latency = 0;
+	});
+
+	it("should reject when the winning branch diverges from history", async () => {
+		const original = async (ctx: WorkflowContextInterface) =>
+			await ctx.race("first", [
+				{
+					name: "a",
+					run: async (branchCtx) => {
+						await branchCtx.step("removed-step", async () => {});
+						await branchCtx.queue.next("go", { names: ["go"] });
+						return "a";
+					},
+				},
+			]);
+		const changed = async (ctx: WorkflowContextInterface) =>
+			await ctx.race("first", [
+				{
+					name: "a",
+					run: async (branchCtx) => {
+						await branchCtx.queue.next("go", { names: ["go"] });
+						return "a";
+					},
+				},
+			]);
+
+		const firstRun = await runWorkflow(
+			"wf-1",
+			original,
+			undefined,
+			driver,
+			{
+				mode: "yield",
+			},
+		).result;
+		expect(firstRun.state).toBe("sleeping");
+
+		await driver.messageDriver.addMessage({
+			id: "go-1",
+			name: "go",
+			data: {},
+			sentAt: Date.now(),
+		});
+
+		await expect(
+			runWorkflow("wf-1", changed, undefined, driver, { mode: "yield" })
+				.result,
+		).rejects.toThrow(HistoryDivergedError);
+	});
+});
