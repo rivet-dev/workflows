@@ -80,7 +80,7 @@
 			"title": "Migrations",
 			"pages": [
 				{
-					"title": "Migrate from Cloudflare Workflows",
+					"title": "From Cloudflare Workflows",
 					"href": "/guides/migrate-cloudflare-workflows"
 				}
 			]

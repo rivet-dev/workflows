@@ -126,6 +126,17 @@ export const orderWorkflow = workflow(
 			});
 			// docs:end child
 
+			// docs:start complete
+			await ctx.step("complete", async (step) => {
+				const output = { chargeId, fraudScore: checks.fraud };
+				await step.db.execute(
+					"UPDATE run SET status = 'complete', output = ?, error = NULL WHERE id = 1",
+					JSON.stringify(output),
+				);
+				step.broadcast("progress", { step: "complete" });
+			});
+			// docs:end complete
+
 			// docs:start sleep
 			// Compute times inside a step, so a replay sees the same value.
 			const followUpAt = await ctx.step(
@@ -136,17 +147,6 @@ export const orderWorkflow = workflow(
 			await ctx.sleepUntil("wait-for-follow-up", followUpAt);
 			await ctx.step("send-reminder", async () => sendReminder(input.email));
 			// docs:end sleep
-
-			// docs:start complete
-			await ctx.step("complete", async (step) => {
-				const output = { chargeId, fraudScore: checks.fraud };
-				await step.db.execute(
-					"UPDATE run SET status = 'complete', output = ? WHERE id = 1",
-					JSON.stringify(output),
-				);
-				step.broadcast("progress", { step: "complete" });
-			});
-			// docs:end complete
 		},
 
 		// docs:start status
@@ -175,7 +175,14 @@ export const orderWorkflow = workflow(
 		// docs:start on-error
 		// Record terminal failures, so getStatus can report them.
 		onError: async (c, event) => {
-			if ("step" in event && event.step.willRetry) return;
+			// onError also sees attempts that will retry and failures that
+			// run handles with tryStep. Skip both.
+			if (
+				"step" in event &&
+				(event.step.willRetry || event.step.stepName === "send-receipt")
+			) {
+				return;
+			}
 			const error =
 				"step" in event
 					? event.step.error
