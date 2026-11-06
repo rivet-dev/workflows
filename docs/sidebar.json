@@ -75,6 +75,15 @@
 					"href": "/guides/webhook-delivery"
 				}
 			]
+		},
+		{
+			"title": "Migrations",
+			"pages": [
+				{
+					"title": "Migrate from Cloudflare Workflows",
+					"href": "/guides/migrate-cloudflare-workflows"
+				}
+			]
 		}
 	]
 }
