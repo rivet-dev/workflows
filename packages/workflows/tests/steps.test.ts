@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { getEventListeners } from "node:events";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deserializeEntry } from "../schemas/serde.js";
 import { buildHistoryPrefixAll } from "../src/keys.js";
 import {
@@ -15,6 +19,15 @@ import {
 } from "../src/testing.js";
 
 const modes = ["yield", "live"] as const;
+
+// Longer than the 2^31-1 ms that a single setTimeout can wait.
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const JUST_OVER_SET_TIMEOUT_LIMIT_MS = 2 ** 31;
+
+const execFileAsync = promisify(execFile);
+const LONG_TIMEOUT_STEP_FIXTURE = fileURLToPath(
+	new URL("./fixtures/long-timeout-step.ts", import.meta.url),
+);
 
 class CountingDriver extends InMemoryDriver {
 	batchCalls = 0;
@@ -541,6 +554,172 @@ for (const mode of modes) {
 					.result,
 			).rejects.toThrow(CriticalError);
 		});
+
+		for (const [label, timeout] of [
+			["30 days", THIRTY_DAYS_MS],
+			["Infinity", Number.POSITIVE_INFINITY],
+			["0", 0],
+			["-1", -1],
+			["NaN", Number.NaN],
+		] as const) {
+			it(`should finish steps with a timeout of ${label}`, async () => {
+				const workflow = async (ctx: WorkflowContextInterface) => {
+					return await ctx.step({
+						name: "long-timeout-step",
+						timeout,
+						run: async () => {
+							await new Promise((resolve) => setTimeout(resolve, 25));
+							return "done";
+						},
+					});
+				};
+
+				const result = await runWorkflow(
+					"wf-1",
+					workflow,
+					undefined,
+					driver,
+					{ mode },
+				).result;
+
+				expect(result.state).toBe("completed");
+				expect(result.output).toBe("done");
+			});
+		}
+
+		for (const [label, timeout] of [
+			["2^31 ms", JUST_OVER_SET_TIMEOUT_LIMIT_MS],
+			["30 days", THIRTY_DAYS_MS],
+		] as const) {
+			it(`should time out a step when a timeout of ${label} elapses`, async () => {
+				vi.useFakeTimers();
+				try {
+					const workflow = async (ctx: WorkflowContextInterface) => {
+						return await ctx.step({
+							name: "stuck-step",
+							timeout,
+							run: () => new Promise<string>(() => {}),
+						});
+					};
+
+					const result = runWorkflow(
+						"wf-1",
+						workflow,
+						undefined,
+						driver,
+						{ mode },
+					).result;
+					let settled = false;
+					result.then(
+						() => {
+							settled = true;
+						},
+						() => {
+							settled = true;
+						},
+					);
+
+					await vi.advanceTimersByTimeAsync(timeout - 1000);
+					expect(settled).toBe(false);
+
+					await vi.advanceTimersByTimeAsync(2000);
+					await expect(result).rejects.toThrow(CriticalError);
+					await expect(result).rejects.toThrow(
+						`Step "stuck-step" timed out after ${timeout}ms`,
+					);
+				} finally {
+					vi.useRealTimers();
+				}
+			});
+		}
+
+		it("should exit the process when a step finishes before a long timeout", async () => {
+			// A timer left behind keeps the process alive for 24.8 days.
+			const { stdout } = await execFileAsync(
+				process.execPath,
+				["--import", "tsx", LONG_TIMEOUT_STEP_FIXTURE, mode],
+				{ timeout: 8000 },
+			);
+
+			expect(JSON.parse(stdout)).toEqual({
+				state: "completed",
+				output: "done",
+			});
+		});
+
+		it("should leave no abort listeners on ctx.abortSignal after many steps", async () => {
+			// Node never warns about AbortSignal listeners, so count them.
+			const workflow = async (ctx: WorkflowContextInterface) => {
+				const listenerCount = () =>
+					getEventListeners(ctx.abortSignal, "abort").length;
+				const before = listenerCount();
+				for (let i = 0; i < 30; i++) {
+					await ctx.step({
+						name: `step-${i}`,
+						timeout: THIRTY_DAYS_MS,
+						run: async () => i,
+					});
+				}
+				const after = listenerCount();
+				return { before, after };
+			};
+
+			const result = await runWorkflow(
+				"wf-1",
+				workflow,
+				undefined,
+				driver,
+				{ mode },
+			).result;
+
+			expect(result.state).toBe("completed");
+			expect(result.output?.after).toBe(result.output?.before);
+		});
+
+		for (const retryOnTimeout of [false, true]) {
+			it(`should retry a step that throws when retryOnTimeout is ${retryOnTimeout}`, async () => {
+				let attempts = 0;
+				const workflow = async (ctx: WorkflowContextInterface) => {
+					return await ctx.step({
+						name: "flaky-step",
+						timeout: 1000,
+						retryOnTimeout,
+						maxRetries: 3,
+						retryBackoffBase: 1,
+						retryBackoffMax: 1,
+						run: async () => {
+							attempts++;
+							if (attempts < 3) {
+								throw new Error("Transient failure");
+							}
+							return "success";
+						},
+					});
+				};
+
+				let result = await runWorkflow(
+					"wf-1",
+					workflow,
+					undefined,
+					driver,
+					{ mode },
+				).result;
+				while (result.state === "sleeping") {
+					await new Promise((resolve) => setTimeout(resolve, 5));
+					result = await runWorkflow(
+						"wf-1",
+						workflow,
+						undefined,
+						driver,
+						{ mode },
+					).result;
+				}
+
+				expect(result.state).toBe("completed");
+				expect(result.output).toBe("success");
+				expect(attempts).toBe(3);
+			});
+		}
 
 		it("should retry steps that exceed timeout when retryOnTimeout is set", async () => {
 			let attempts = 0;
