@@ -33,6 +33,65 @@ function timeoutBranch(durationMs: number) {
 	};
 }
 
+type CrashPoint = "before-delete" | "after-history-delete";
+
+/**
+ * Stands in for a process that dies during race cleanup. After the crash,
+ * every write and delete fails, so nothing more reaches storage. `restart`
+ * keeps the stored data, like a new process opening the same storage.
+ */
+class CrashingDriver extends InMemoryDriver {
+	crashPoint: CrashPoint | undefined;
+	#crashed = false;
+
+	restart() {
+		this.crashPoint = undefined;
+		this.#crashed = false;
+	}
+
+	#checkAlive() {
+		if (this.#crashed) {
+			throw new Error("driver crashed");
+		}
+	}
+
+	#crashBeforeDelete() {
+		this.#checkAlive();
+		if (this.crashPoint === "before-delete") {
+			this.#crashed = true;
+			throw new Error("driver crashed");
+		}
+	}
+
+	override async set(key: Uint8Array, value: Uint8Array) {
+		this.#checkAlive();
+		await super.set(key, value);
+	}
+
+	override async batch(writes: Parameters<InMemoryDriver["batch"]>[0]) {
+		this.#checkAlive();
+		await super.batch(writes);
+	}
+
+	override async delete(key: Uint8Array) {
+		this.#crashBeforeDelete();
+		await super.delete(key);
+	}
+
+	override async deleteRange(start: Uint8Array, end: Uint8Array) {
+		this.#crashBeforeDelete();
+		await super.deleteRange(start, end);
+	}
+
+	override async deletePrefix(prefix: Uint8Array) {
+		this.#crashBeforeDelete();
+		await super.deletePrefix(prefix);
+		if (this.crashPoint === "after-history-delete") {
+			this.#crashed = true;
+		}
+	}
+}
+
 function raceBranchStatuses(
 	history: WorkflowHistorySnapshot | undefined,
 ): Record<string, string> {
@@ -967,6 +1026,74 @@ for (const mode of modes) {
 				).result;
 				expect(resumed.output).toEqual(expected);
 			});
+		},
+	);
+}
+
+for (const mode of modes) {
+	describe(
+		`Workflow Engine Race Crash Recovery (${mode})`,
+		{ sequential: true },
+		() => {
+			const crashPoints: CrashPoint[] = [
+				"before-delete",
+				"after-history-delete",
+			];
+
+			for (const crashPoint of crashPoints) {
+				it(`should keep the winner and not rerun a finished loser step after a crash ${crashPoint}`, async () => {
+					const driver = new CrashingDriver();
+					driver.latency = 0;
+					let confirmedRuns = 0;
+
+					const workflow = async (ctx: WorkflowContextInterface) =>
+						await ctx.race("race", [
+							{
+								name: "loser",
+								run: async (branchCtx) => {
+									await branchCtx.step(
+										"confirmed",
+										async () => {
+											confirmedRuns += 1;
+										},
+									);
+									await branchCtx.sleep("wait", 60_000);
+									return "loser";
+								},
+							},
+							{
+								name: "winner",
+								run: async (branchCtx) =>
+									await branchCtx.step("work", async () => {
+										await new Promise((resolve) =>
+											setTimeout(resolve, 30),
+										);
+										return "won";
+									}),
+							},
+						]);
+
+					driver.crashPoint = crashPoint;
+					await runWorkflow("wf-1", workflow, undefined, driver, {
+						mode,
+					}).result.catch(() => undefined);
+
+					driver.restart();
+					const resumed = await runWorkflow(
+						"wf-1",
+						workflow,
+						undefined,
+						driver,
+						{ mode },
+					).result;
+
+					expect(resumed.output).toEqual({
+						winner: "winner",
+						value: "won",
+					});
+					expect(confirmedRuns).toBe(1);
+				});
+			}
 		},
 	);
 }
