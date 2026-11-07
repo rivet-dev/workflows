@@ -35,18 +35,15 @@ export const order = workflow({
 	actions: {
 		// Read which steps have finished so far.
 		getProgress: async (c) => {
-			return (await c.db.execute(
-				"SELECT step FROM progress ORDER BY id",
-			)) as { step: string }[];
+			return (await c.db.execute("SELECT step FROM progress ORDER BY id")) as {
+				step: string;
+			}[];
 		},
 	},
 });
 
 // Write one progress row to this order's database.
-async function record(
-	step: WorkflowStepContextOf<typeof order>,
-	name: string,
-) {
+async function record(step: WorkflowStepContextOf<typeof order>, name: string) {
 	await step.db.execute("INSERT INTO progress (step) VALUES (?)", name);
 }
 
