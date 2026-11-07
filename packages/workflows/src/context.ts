@@ -31,8 +31,8 @@ import {
 	registerName,
 } from "./location.js";
 import {
+	collectDeletionsForPrefix,
 	createEntry,
-	deleteEntriesWithPrefix,
 	flush,
 	getOrCreateMetadata,
 	loadMetadata,
@@ -2749,8 +2749,12 @@ export class WorkflowContextImpl implements WorkflowContextInterface {
 			throw buildSchedulerYieldError(schedulerYieldState);
 		}
 
-		// Clean up entries from non-winning branches
+		// Clean up entries from non-winning branches. The flush saves the
+		// winner before it deletes them, so a crash in between leaves only
+		// stale loser entries, which replay skips because the race has a winner.
+		let loserDeletions: PendingDeletions | undefined;
 		if (hasWinner && winnerName !== null) {
+			loserDeletions = { prefixes: [], keys: [], ranges: [] };
 			for (const branch of branches) {
 				if (branch.name !== winnerName) {
 					if (yieldedBranches.has(branch.name)) {
@@ -2762,18 +2766,18 @@ export class WorkflowContextImpl implements WorkflowContextInterface {
 						location,
 						branch.name,
 					);
-					await deleteEntriesWithPrefix(
+					const deletions = collectDeletionsForPrefix(
 						this.storage,
-						this.driver,
 						branchLocation,
-						this.historyNotifier,
 					);
+					loserDeletions.prefixes.push(...deletions.prefixes);
+					loserDeletions.keys.push(...deletions.keys);
 				}
 			}
 		}
 
 		// Flush final state
-		await this.flushStorage();
+		await this.flushStorageWithDeletions(loserDeletions);
 
 		// Log late errors if any (these occurred after a winner was determined)
 		if (lateErrors.length > 0) {
