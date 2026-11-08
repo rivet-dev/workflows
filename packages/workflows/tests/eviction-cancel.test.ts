@@ -8,6 +8,14 @@ import {
 
 const modes = ["yield", "live"] as const;
 
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((res) => {
+		resolve = res;
+	});
+	return { promise, resolve };
+}
+
 for (const mode of modes) {
 	describe(
 		`Workflow Engine Eviction and Cancellation (${mode})`,
@@ -82,6 +90,46 @@ for (const mode of modes) {
 					runWorkflow("wf-1", workflow, undefined, driver, { mode })
 						.result,
 				).rejects.toThrow(EvictedError);
+			});
+
+			it("should keep the result of a step that finishes after eviction", async () => {
+				const started = deferred<void>();
+				const work = deferred<string>();
+				let runs = 0;
+				const workflow = async (ctx: WorkflowContextInterface) =>
+					await ctx.step({
+						name: "slow-step",
+						timeout: 60_000,
+						run: async () => {
+							runs++;
+							started.resolve();
+							return await work.promise;
+						},
+					});
+
+				const handle = runWorkflow(
+					"wf-1",
+					workflow,
+					undefined,
+					driver,
+					{ mode },
+				);
+				await started.promise;
+				handle.evict();
+				work.resolve("finished after eviction");
+				await handle.result;
+
+				const resumed = await runWorkflow(
+					"wf-1",
+					workflow,
+					undefined,
+					driver,
+					{ mode },
+				).result;
+
+				expect(resumed.state).toBe("completed");
+				expect(resumed.output).toBe("finished after eviction");
+				expect(runs).toBe(1);
 			});
 		},
 	);
