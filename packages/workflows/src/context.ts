@@ -71,7 +71,7 @@ import type {
 	WorkflowQueueNextBatchOptions,
 	WorkflowQueueNextOptions,
 } from "./types.js";
-import { setLongTimeout } from "./utils.js";
+import { type LongTimeoutHandle, setLongTimeout } from "./utils.js";
 
 /**
  * Default values for step configuration.
@@ -1241,34 +1241,33 @@ export class WorkflowContextImpl implements WorkflowContextInterface {
 		timeoutMs: number,
 		stepName: string,
 	): Promise<T> {
-		let timeoutId: ReturnType<typeof setTimeout> | undefined;
-		let onAbort: (() => void) | undefined;
+		let interrupt!: (error: Error) => void;
 		const interrupted = new Promise<never>((_, reject) => {
-			if (timeoutMs > 0) {
-				timeoutId = setTimeout(() => {
-					reject(new StepTimeoutError(stepName, timeoutMs));
-				}, timeoutMs);
-			}
-
-			// A step that a race cancels stops being awaited, as with a timeout.
-			// Eviction does not interrupt a step, so its result is still recorded.
-			onAbort = () => {
-				if (this.isRaceCancelled()) {
-					reject(new EvictedError());
-				}
-			};
-			this.abortSignal.addEventListener("abort", onAbort, { once: true });
+			interrupt = reject;
 		});
+
+		// A timeout of 0 or a non-finite timeout such as Infinity disables the timeout.
+		let timeout: LongTimeoutHandle | undefined;
+		if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
+			timeout = setLongTimeout(() => {
+				interrupt(new StepTimeoutError(stepName, timeoutMs));
+			}, timeoutMs);
+		}
+
+		// A race that cancels this step stops awaiting it, as a timeout does.
+		// Eviction does not interrupt a step, so its result is still recorded.
+		const onAbort = () => {
+			if (this.isRaceCancelled()) {
+				interrupt(new EvictedError());
+			}
+		};
+		this.abortSignal.addEventListener("abort", onAbort, { once: true });
 
 		try {
 			return await Promise.race([promise, interrupted]);
 		} finally {
-			if (timeoutId !== undefined) {
-				clearTimeout(timeoutId);
-			}
-			if (onAbort) {
-				this.abortSignal.removeEventListener("abort", onAbort);
-			}
+			timeout?.abort();
+			this.abortSignal.removeEventListener("abort", onAbort);
 		}
 	}
 
