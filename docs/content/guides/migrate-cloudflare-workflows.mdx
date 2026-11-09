@@ -1,0 +1,260 @@
+---
+title: "Migrate from Cloudflare Workflows"
+description: "Move Cloudflare Workflows to Rivet Workflows: map steps, retries, sleeps, and instance management, and see what has no direct equivalent yet."
+---
+
+import ExampleLinkBar from "@/components/docs/ExampleLinkBar.astro";
+
+<ExampleLinkBar href="https://github.com/rivet-dev/workflows/tree/main/examples/docs/guides/migrate-cloudflare-workflows" />
+
+A Cloudflare Workflow instance becomes a Rivet workflow: a durable actor whose `run` function is built from replay-safe steps. Both runtimes record each step's result and replay it after a restart, so the programming model carries over: `step.do` becomes `ctx.step` and `step.sleep` becomes `ctx.sleep`.
+
+What changes is the shell around the steps. The instance ID is the workflow's [key](/actors/docs/keys), your code stores the input in the workflow's SQLite database, and you report status through actions and events that you define.
+
+## How concepts map
+
+| Cloudflare | Rivet | Notes |
+| --- | --- | --- |
+| `WorkflowEntrypoint` with `run(event, step)` | [`workflow({ run })`](/workflows/docs) | A workflow is an actor, so it can also have actions, events, and a database. |
+| Instance ID | [Key](/actors/docs/keys) | `client.orderWorkflow.create([id])` |
+| `event.payload` | Input to `onCreate` | Store it in SQLite and read it in a step. |
+| `step.do(name, callback)` | [`ctx.step(name, callback)`](/workflows/docs/steps) | Results are recorded and replayed. |
+| `WorkflowStepConfig` | `ctx.step({ maxRetries, retryBackoffBase, retryBackoffMax, timeout })` | Different defaults. See [Retries and timeouts](#retries-and-timeouts). |
+| `NonRetryableError` | `CriticalError` | |
+| `try`/`catch` around `step.do` | [`ctx.tryStep`](/workflows/docs/steps#handling-terminal-failures-as-data) or `ctx.try` | Failures come back as data. |
+| `step.sleep`, `step.sleepUntil` | [`ctx.sleep`, `ctx.sleepUntil`](/workflows/docs/timers-and-concurrency) | Milliseconds only. |
+| `Promise.all` over steps | [`ctx.join`](/workflows/docs/timers-and-concurrency#join) | `ctx.race` replaces `Promise.race`. |
+| `env.MY_WORKFLOW.create({ id, params })` | `client.orderWorkflow.create([id], { input })` | |
+| `instance.status()` | An action you define | Events can push progress instead. |
+| `instance.terminate()` | An action that calls `c.destroy()` | Also deletes the workflow's data. |
+| `step.waitForEvent`, `instance.sendEvent` | Queues, which are being deprecated | See [Waiting for events](#waiting-for-events). |
+| `pause`, `resume`, `restart` | No equivalent | |
+| `workflows` binding in Wrangler config | [`setup({ use })`](/actors/docs/registry-configuration) | |
+
+## Define a workflow
+
+Install the packages:
+
+```sh
+npm add @rivet-dev/workflows rivetkit
+```
+
+A Cloudflare class with a `run` method becomes a `workflow()` definition. `ctx.key` holds the identifier you created it with, so a small value like an order ID can travel in the key:
+
+```ts Cloudflare @nocheck
+import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+
+export class ShipmentWorkflow extends WorkflowEntrypoint<Env, { orderId: string }> {
+  async run(event: WorkflowEvent<{ orderId: string }>, step: WorkflowStep) {
+    await step.do("notify-warehouse", async () => {
+      await fetch("https://warehouse.example.com/shipments", {
+        method: "POST",
+        body: JSON.stringify({ orderId: event.payload.orderId }),
+      });
+    });
+  }
+}
+```
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="Rivet" region="shipment" />
+
+Register every workflow in one registry. This replaces the `workflows` entries in your Wrangler config:
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="Rivet" region="registry" />
+
+## Pass input
+
+Cloudflare hands `params` to `run` as `event.payload`. In Rivet, `onCreate` receives the input once, before `run` starts. Store it in the workflow's SQLite database, then read it in the first step:
+
+```ts Cloudflare @nocheck
+type OrderInput = { orderId: string; email: string; amountCents: number };
+
+export class OrderWorkflow extends WorkflowEntrypoint<Env, OrderInput> {
+  async run(event: WorkflowEvent<OrderInput>, step: WorkflowStep) {
+    const { orderId, email, amountCents } = event.payload;
+    // ...
+  }
+}
+```
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="Rivet" region="input" />
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="Rivet" region="load-input" />
+
+- Reading the input in a step records it, so every replay sees the same value.
+- `event.timestamp` has no direct equivalent. Store `Date.now()` in `onCreate` if you need it, as the `created_at` column does here.
+
+## Retries and timeouts
+
+Step options move from a separate config argument onto the step itself:
+
+```ts Cloudflare @nocheck
+const chargeId = await step.do(
+  "charge-card",
+  {
+    retries: { limit: 5, delay: "1 second", backoff: "exponential" },
+    timeout: "10 minutes",
+  },
+  async () => chargeCard(orderId, amountCents),
+);
+```
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="Rivet" region="retries" />
+
+- `retries.limit` becomes `maxRetries`, which counts retries after the first attempt.
+- `retries.delay` becomes `retryBackoffBase`. The first retry waits twice the base, and each later retry doubles the wait, up to `retryBackoffMax`. Rivet only has exponential backoff, so there is no `constant` or `linear` option.
+- Durations are milliseconds. Duration strings like `"10 minutes"` are not accepted.
+- The defaults are lower than Cloudflare's: 3 retries, a 100 ms base delay, and a **30 second timeout**. Set `timeout` on any step that can take longer, or `0` to disable it.
+- A timeout fails the step right away. Set `retryOnTimeout: true` to retry it like any other error.
+- A timeout doesn't stop the step's callback. With `retryOnTimeout`, the timed-out attempt can still be running when the retry starts, so the work must be safe to run twice. The example is safe because `chargeCard` sends the order ID as an idempotency key.
+
+## Stop retrying
+
+`NonRetryableError` becomes `CriticalError`. Both fail the step without retrying:
+
+```ts Cloudflare @nocheck
+import { NonRetryableError } from "cloudflare:workflows";
+
+await step.do("validate", async () => {
+  if (amountCents <= 0) {
+    throw new NonRetryableError("amount must be positive");
+  }
+});
+```
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="Rivet" region="critical" />
+
+## Handle a failed step
+
+In Cloudflare, you catch a failed step with `try`/`catch`. In Rivet, `ctx.tryStep` returns the failure as data, and `ctx.try` does the same for a block of steps:
+
+```ts Cloudflare @nocheck
+try {
+  await step.do("send-receipt", { retries: { limit: 3, delay: 1000 } }, async () =>
+    sendReceipt(email, chargeId),
+  );
+} catch (error) {
+  await step.do("log-receipt-failure", async () => {
+    console.warn("receipt not sent", error);
+  });
+}
+```
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="Rivet" region="try-step" />
+
+To undo earlier steps when a later one fails, use [rollback](/workflows/docs/failure-and-recovery#rollback) instead of hand-written cleanup steps.
+
+## Sleep
+
+`step.sleep` and `step.sleepUntil` map one to one. As in Cloudflare, compute any time inside a step, so replays get the same value:
+
+```ts Cloudflare @nocheck
+const followUpAt = await step.do("follow-up-time", async () => Date.now() + 7 * 24 * 60 * 60 * 1000);
+await step.sleep("wait-a-day", "1 day");
+await step.sleepUntil("wait-for-follow-up", followUpAt);
+await step.do("send-reminder", async () => sendReminder(email));
+```
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="Rivet" region="sleep" />
+
+A long sleep doesn't hold a process. The workflow is saved and resumes when the timer is due.
+
+## Run steps in parallel
+
+Replace `Promise.all` over steps with `ctx.join`. Each branch is named and records its own steps:
+
+```ts Cloudflare @nocheck
+const [fraudScore, labelId] = await Promise.all([
+  step.do("score-fraud", async () => scoreFraud(orderId)),
+  step.do("create-label", async () => createLabel(orderId)),
+]);
+```
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="Rivet" region="join" />
+
+Use [`ctx.race`](/workflows/docs/timers-and-concurrency#race) where you used `Promise.race`.
+
+## Start a workflow
+
+Instead of a Worker binding, call the workflow through a RivetKit client from any server, script, or actor:
+
+```ts Cloudflare @nocheck
+export default {
+  async fetch(request: Request, env: Env) {
+    const input = await request.json<OrderInput>();
+    const instance = await env.ORDER_WORKFLOW.create({ id: input.orderId, params: input });
+    return Response.json({ id: instance.id }, { status: 202 });
+  },
+};
+```
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/server.ts" title="Rivet" region="create" />
+
+- Like `create` with an existing instance ID, `create` with an existing key fails.
+- To start a workflow only if it doesn't exist yet, use `getOrCreate(key, { createWithInput })`.
+- To start workflows on a schedule instead of a Cron Trigger, call `create` from an actor's [cron job](/guides/cron-jobs).
+
+## Check status and terminate
+
+Cloudflare tracks each instance's status for you. In Rivet, you record it in the workflow's database and expose it through actions:
+
+```ts Cloudflare @nocheck
+const instance = await env.ORDER_WORKFLOW.get(id);
+const { status, output, error } = await instance.status();
+await instance.terminate();
+```
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="Rivet" region="status" />
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/server.ts" title="Rivet" region="get" />
+
+The `complete` step records the result, and the `onError` hook records terminal failures:
+
+<CodeGroup>
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="complete" region="complete" />
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="onError" region="on-error" />
+</CodeGroup>
+
+- `c.destroy()` stops the workflow and deletes it along with its data. Cloudflare keeps a terminated instance's record, so copy anything you need elsewhere first.
+- `onError` also sees attempts that will retry and failures that `tryStep` or `try` handle. Skip those, as the example does for `send-receipt`, so a recovered failure doesn't mark a running order as failed.
+- `onError` only observes. Use it for status and alerts, not for work the workflow depends on.
+
+Steps can also broadcast [events](/actors/docs/events), so a client can follow progress live instead of polling. Connecting with `createWithInput` starts the workflow and subscribes in one call:
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/client.ts" title="Rivet" region="progress" />
+
+## Start a child workflow
+
+A parent starts a child from inside a step, the same as in Cloudflare. `getOrCreate` makes the step safe to run again:
+
+```ts Cloudflare @nocheck
+await step.do("start-shipment", async () => {
+  await this.env.SHIPMENT_WORKFLOW.create({ id: orderId, params: { orderId } });
+});
+```
+
+<CodeSnippet file="examples/docs/guides/migrate-cloudflare-workflows/order.ts" title="Rivet" region="child" />
+
+As in Cloudflare, the parent doesn't wait for the child to finish. To check on the child, call one of its actions from a later step.
+
+## Waiting for events
+
+Delivering an external event to a running workflow, the job of `step.waitForEvent` and `instance.sendEvent`, currently goes through workflow queues. Queues are being deprecated, so don't build new code on them.
+
+Instead, a workflow can wait by checking for the event itself. An action writes the event into the workflow's SQLite database, and the workflow reads it in a `ctx.loop` that sleeps between checks. Keep the interval long enough that waiting doesn't wake the workflow more often than you need.
+
+## Differences to plan for
+
+- **Code outside steps runs on every replay.** The rules from Cloudflare still apply: name steps deterministically, keep side effects inside steps, and branch only on recorded values.
+- **Changing in-flight workflows.** Cloudflare has no API like `getVersion` for changing the code of in-flight instances. In Rivet, use [`ctx.getVersion`](/workflows/docs/versioning) to change the steps of workflows that are already running.
+- **No pause, resume, or restart.** Destroy the workflow and create a new one to start over.
+- **Status is yours to define.** There is no built-in `queued`, `waiting`, or `errored` status. Store what your callers need, as in [Check status and terminate](#check-status-and-terminate).
+- **Inspecting runs.** Instead of the Cloudflare dashboard and `wrangler workflows` commands, the inspector shows each workflow's step history. See [Debugging](/workflows/docs/reference#debugging).
+- **Local development.** Replace `wrangler dev` with running your server, for example `npx tsx server.ts`. `registry.start()` runs workflows in the same process.
+
+## Next steps
+
+- [Steps](/workflows/docs/steps): how steps are recorded and replayed.
+- [Timers & Concurrency](/workflows/docs/timers-and-concurrency): sleeps, timeouts, `join`, and `race`.
+- [Failure & Recovery](/workflows/docs/failure-and-recovery): error hooks and rollback.
+- [Versioning & Migrations](/workflows/docs/versioning): change workflows that are already running.
