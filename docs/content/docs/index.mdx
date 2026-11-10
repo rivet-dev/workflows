@@ -172,6 +172,8 @@ Use step timeouts and retries for slow or flaky dependencies.
 
 Step timeouts are critical by default and fail immediately. Set `retryOnTimeout: true` if a timeout should retry like any other error using `maxRetries`.
 
+Each non-ephemeral step attempt is persisted before the callback starts, ensuring that interruptions count towards the retry limit. Ephemeral steps skip this checkpoint and, if interrupted, may not count towards the retry limit. Steps may be retried and should be idempotent.
+
 Workflows use roll-forward semantics everywhere. When a step throws, any `state` or `vars` mutations it made before failing are never rolled back, whether the step retries or the failure is caught by `tryStep` or `try`. The next attempt observes whatever the failed attempt already wrote, so write steps idempotently: check before you increment, or move the mutation after the fallible work.
 
 <CodeSnippet file="examples/docs/actors-workflows/timeouts.ts" />

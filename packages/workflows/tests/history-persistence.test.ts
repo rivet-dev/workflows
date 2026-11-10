@@ -15,7 +15,6 @@ class HeldWriteDriver extends InMemoryDriver {
 	failNext = false;
 	readonly writeStarted = Promise.withResolvers<void>();
 	readonly releaseWrite = Promise.withResolvers<void>();
-	readonly heldWriteFinished = Promise.withResolvers<void>();
 
 	override async batch(writes: KVWrite[]): Promise<void> {
 		if (this.holdNext) {
@@ -23,7 +22,6 @@ class HeldWriteDriver extends InMemoryDriver {
 			this.writeStarted.resolve();
 			await this.releaseWrite.promise;
 			await super.batch(writes);
-			this.heldWriteFinished.resolve();
 			return;
 		}
 		if (this.failNext) {
@@ -106,6 +104,7 @@ describe("history saved while join branches overlap", () => {
 	it("replays after a wake without re-running finished steps, then runs the next step", async () => {
 		const driver = newDriver();
 		const runs: string[] = [];
+		const secondSubmitted = Promise.withResolvers<void>();
 		const workflow = async (ctx: WorkflowContextInterface) => {
 			const joined = await ctx.join("jobs", {
 				a: {
@@ -123,16 +122,12 @@ describe("history saved while join branches overlap", () => {
 						// Starts after the sibling's save opens, so this step's name
 						// is registered during that save.
 						await driver.writeStarted.promise;
-						return await branch.step("second", async () => {
+						const second = branch.step("second", async () => {
 							runs.push("second");
-							// Finish the sibling's save before this step saves.
-							driver.releaseWrite.resolve();
-							await driver.heldWriteFinished.promise;
-							await new Promise((resolve) =>
-								setImmediate(resolve),
-							);
 							return "b";
 						});
+						secondSubmitted.resolve();
+						return await second;
 					},
 				},
 			});
@@ -144,8 +139,11 @@ describe("history saved while join branches overlap", () => {
 			return { joined, after };
 		};
 
-		const first = await runWorkflow("wf", workflow, undefined, driver)
-			.result;
+		const handle = runWorkflow("wf", workflow, undefined, driver);
+		// Release write after the second step is submitted
+		await secondSubmitted.promise;
+		driver.releaseWrite.resolve();
+		const first = await handle.result;
 		expect(first.state).toBe("sleeping");
 
 		const resumed = await wakeAndRerun(driver, workflow);
@@ -304,8 +302,9 @@ describe("history saved while join branches overlap", () => {
 		});
 	});
 
-	it("keeps a finished step's result when the save carrying it fails", async () => {
+	it("keeps an ephemeral result when the admission save carrying it fails", async () => {
 		const driver = newDriver();
+		let workCalls = 0;
 		const workflow = async (ctx: WorkflowContextInterface) => {
 			// Ephemeral, so the next step's save is the one that carries it.
 			await ctx.step({
@@ -313,15 +312,15 @@ describe("history saved while join branches overlap", () => {
 				ephemeral: true,
 				run: async () => "kept",
 			});
+			driver.failNext = true;
 			await ctx.step("work", async () => {
-				driver.failNext = true;
+				workCalls++;
 			});
 		};
-
-		const result = await runWorkflow("wf", workflow, undefined, driver)
-			.result;
-
-		expect(result.state).toBe("sleeping");
+		await expect(
+			runWorkflow("wf", workflow, undefined, driver).result,
+		).rejects.toThrow("write failed");
+		expect(workCalls).toBe(0);
 		expect(await savedStep(driver, "quiet")).toMatchObject({
 			output: "kept",
 			status: "completed",
@@ -331,20 +330,23 @@ describe("history saved while join branches overlap", () => {
 	it("does not confirm a step until its result is saved", async () => {
 		const driver = newDriver();
 		let savedWhenConfirmed: unknown;
+		const lateAdmitted = Promise.withResolvers<void>();
 		const workflow = (ctx: WorkflowContextInterface) =>
 			ctx.join("jobs", {
 				a: {
 					run: (branch) =>
 						branch.step("held", async () => {
+							await lateAdmitted.promise;
 							driver.holdNext = true;
 							return "a";
 						}),
 				},
 				b: {
 					run: async (branch) => {
-						await driver.writeStarted.promise;
 						const output = await branch.step("late", async () => {
+							lateAdmitted.resolve();
 							// Finish while the held save is still open, then let it close.
+							await driver.writeStarted.promise;
 							setImmediate(() => driver.releaseWrite.resolve());
 							return "b";
 						});
@@ -364,14 +366,17 @@ describe("history saved while join branches overlap", () => {
 	it("keeps every branch's result when a save that several branches wait on fails", async () => {
 		const driver = newDriver();
 		const runs: string[] = [];
+		const waiting = ["b", "c", "d"];
+		let admitted = 0;
+		const allAdmitted = Promise.withResolvers<void>();
 		const waitingStep = (name: string) => ({
-			run: async (branch: WorkflowContextInterface) => {
-				await driver.writeStarted.promise;
-				return await branch.step(name, async () => {
+			run: async (branch: WorkflowContextInterface) =>
+				await branch.step(name, async () => {
 					runs.push(name);
+					if (++admitted === waiting.length) allAdmitted.resolve();
+					await driver.writeStarted.promise;
 					return name;
-				});
-			},
+				}),
 		});
 		const workflow = (ctx: WorkflowContextInterface) =>
 			ctx.join("jobs", {
@@ -379,6 +384,7 @@ describe("history saved while join branches overlap", () => {
 					run: (branch) =>
 						branch.step("held", async () => {
 							runs.push("held");
+							await allAdmitted.promise;
 							driver.holdNext = true;
 							return "held";
 						}),
