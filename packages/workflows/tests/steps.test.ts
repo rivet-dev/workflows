@@ -796,6 +796,7 @@ for (const mode of modes) {
 		});
 
 		it("should batch ephemeral steps until a durable flush", async () => {
+			let batchesBeforeDurable = -1;
 			const workflow = async (ctx: WorkflowContextInterface) => {
 				await ctx.step({
 					name: "ephemeral-a",
@@ -807,6 +808,7 @@ for (const mode of modes) {
 					ephemeral: true,
 					run: async () => "b",
 				});
+				batchesBeforeDurable = driver.batchCalls;
 				return await ctx.step("durable", async () => "done");
 			};
 
@@ -820,7 +822,20 @@ for (const mode of modes) {
 
 			expect(result.state).toBe("completed");
 			expect(result.output).toBe("done");
-			expect(driver.batchCalls).toBe(2);
+			// Ephemeral steps do not save immediately. The durable step and workflow
+			// completion may result in up to three writes.
+			expect(batchesBeforeDurable).toBe(0);
+			expect(driver.batchCalls).toBeLessThanOrEqual(3);
+			const storage = await loadStorage(driver);
+			for (const [name, output] of [
+				["ephemeral-a", "a"],
+				["ephemeral-b", "b"],
+			]) {
+				expect(storage.history.entries.get(name)?.kind).toMatchObject({
+					type: "step",
+					data: { output },
+				});
+			}
 		});
 
 		it("should commit error but not output to step entry on failure", async () => {

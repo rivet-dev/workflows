@@ -411,7 +411,11 @@ export interface StepConfig<T> {
 	name: string;
 	run: () => Promise<T>;
 	rollback?: (ctx: RollbackContextInterface, output: T) => Promise<void>;
-	/** If true, step result is not persisted (use for idempotent operations). */
+	/**
+	 * If true, the step's writes are deferred until the next flush. Since
+	 * persistence is not guaranteed, this is best used for idempotent
+	 * operations.
+	 */
 	ephemeral?: boolean;
 	/** Maximum number of retry attempts (default: 3). */
 	maxRetries?: number;

@@ -1044,6 +1044,24 @@ export class WorkflowContextImpl implements WorkflowContextInterface {
 		metadata.lastAttemptAt = Date.now();
 		metadata.dirty = true;
 
+		// Persist before user code execution so that crashes count toward the retry limit
+		if (!config.ephemeral) {
+			try {
+				await this.flushStorage();
+			} catch (error) {
+				// The flush may clear the dirty flag before failing
+				metadata.status = "failed";
+				metadata.error = String(error);
+				metadata.dirty = true;
+				throw error;
+			}
+
+			if (this.abortSignal.aborted || this.evictionSignal.aborted) {
+				// Abort if cancellation or workflow eviction occurred during the flush
+				throw new EvictedError();
+			}
+		}
+
 		// Get timeout configuration
 		const timeout = config.timeout ?? DEFAULT_STEP_TIMEOUT;
 
@@ -1095,8 +1113,8 @@ export class WorkflowContextImpl implements WorkflowContextInterface {
 				entry.kind.data.error = String(error);
 			}
 			entry.dirty = true;
-			// A sibling branch can save this step's running metadata while the
-			// callback runs, so the failure status must be saved again.
+			// Admission or a sibling's save may have cleared the dirty flag.
+			// Mark the failure dirty so the next flush saves it.
 			metadata.dirty = true;
 
 			// Timeout errors are treated as critical by default. Steps opt
