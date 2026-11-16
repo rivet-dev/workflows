@@ -185,10 +185,11 @@ class WorkflowStorage {
 
 		if (includeState) {
 			await this.#db.transaction(commit, {
+				name: "workflow-batch-state",
 				experimental: { includeState: true },
 			});
 		} else {
-			await this.#db.transaction(commit);
+			await this.#db.transaction(commit, { name: "workflow-batch" });
 		}
 	}
 }
