@@ -76,4 +76,8 @@ jobs:
           set -euo pipefail
           git tag "v$VERSION"
           git push origin "v$VERSION"
-          gh release create "v$VERSION" --generate-notes --title "v$VERSION"
+          if [[ "$VERSION" == *-* ]]; then
+            gh release create "v$VERSION" --generate-notes --title "v$VERSION" --prerelease
+          else
+            gh release create "v$VERSION" --generate-notes --title "v$VERSION"
+          fi
