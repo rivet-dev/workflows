@@ -55,6 +55,7 @@ describe("RivetKit workflow driver", () => {
 		await driver.batch([write(), write(3, 4)]);
 		expect(db.transaction).toHaveBeenCalledOnce();
 		expect(db.transaction.mock.calls[0]?.[1]).toEqual({
+			name: "workflow-batch-state",
 			experimental: { includeState: true },
 		});
 	});
@@ -63,7 +64,9 @@ describe("RivetKit workflow driver", () => {
 		const { controlDriver, db } = createSubject();
 		await controlDriver.batch([write()]);
 		expect(db.transaction).toHaveBeenCalledOnce();
-		expect(db.transaction.mock.calls[0]?.[1]).toBeUndefined();
+		expect(db.transaction.mock.calls[0]?.[1]).toEqual({
+			name: "workflow-batch",
+		});
 	});
 
 	test("reads, lists, and deletes byte-compatible rows", async () => {
